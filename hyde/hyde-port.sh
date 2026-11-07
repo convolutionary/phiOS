@@ -319,25 +319,10 @@ if s.count(a) == 1:
 EOF
     fi
 
-    # HyDE leaves misc:focus_on_activate off, so an app asking to be shown (a tray app
-    # reopened from the launcher, a link opening in a browser on another workspace) is ignored
-    f=$HOME/.config/hypr/userprefs.conf
-    if [[ -f "$f" ]] && ! grep -q 'focus_on_activate' "$f"; then
-        printf '\n# phiOS: let apps that ask to be shown actually come to the front\nmisc {\n    focus_on_activate = true\n}\n' >>"$f"
-    fi
-    # ...except Telegram, which asks on every new message and would drag its window (often
-    # parked on the Super+S special workspace) onto the screen
-    if [[ -f "$f" ]] && ! grep -q 'suppress_event activate activatefocus' "$f"; then
-        cat >>"$f" <<'EOF'
-
-# phiOS: Telegram (AyuGram, Kotatogram...) asks to be activated on every new message; with
-# focus_on_activate on, that pulled it (and its special workspace) onto the screen. Ignore it
-windowrule = suppress_event activate activatefocus, match:class ^(com\.ayugram\.desktop|org\.telegram\.desktop|io\.github\.kotatogram|AyuGram|TelegramDesktop|telegram-desktop)$
-EOF
-    fi
-
     # Mullvad keeps running in the tray after its window closes; relaunching it from the menu
-    # did nothing visible when the window sat on another workspace. Raise it instead
+    # did nothing visible when the window sat on another workspace (Hyprland ignores apps asking
+    # to be shown; turning focus_on_activate on instead made Telegram pop its scratchpad open on
+    # every message). Focus its window directly instead
     if [[ -f /usr/share/applications/mullvad-vpn.desktop ]]; then
         mkdir -p "$HOME/.local/share/applications"
         sed 's|^Exec=.*|Exec=phios-raise mullvad-vpn -- "/opt/Mullvad VPN/mullvad-vpn" %U|' \

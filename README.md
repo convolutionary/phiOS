@@ -259,8 +259,7 @@ HyDE bugs it works around, all found by running it on Debian:
 | theme switching writes GTK theme and dark/light through `dconf` | not installed on Debian, so dark/light and icons never change | installs `dconf-cli` |
 | `themepatcher.sh` lists branches through the GitHub API and caches clones as `<branch>-<owner>` | the 60 requests/hour limit runs out mid-gallery, and two themes by the same author overwrite each other | asks `git ls-remote` for the default branch, cache dir per repo |
 | Debian's zsh never reads `/etc/profile.d`, and HyDE's `env.zsh` sets `XDG_DATA_DIRS` without Flatpak's dirs | Flatpak apps never show up in the launcher | adds `/var/lib/flatpak/exports/share` and the per-user one |
-| `misc:focus_on_activate` is off | an app asking to be shown is ignored when its window is on another workspace; reopening Mullvad from the menu "does nothing" | turned on; Mullvad's menu entry goes through `phios-raise`, which focuses its window if it has one |
-| Telegram asks to be activated on every new message | with `focus_on_activate` on, notifications pulled its window (and the Super+S workspace) onto the screen | `suppress_event activate activatefocus` for Telegram, AyuGram and Kotatogram |
+| tray apps like Mullvad keep running when their window closes | relaunching from the menu only asks the hidden window to show itself, which Hyprland ignores when it's on another workspace | Mullvad's menu entry goes through `phios-raise`, which focuses its window if it has one |
 | HyDE's starship config uses modules newer than Debian's starship 1.22 (`cpp`, `pixi`) | "Unknown key" warnings in directories where they'd trigger | removes every module `starship module --list` doesn't know |
 
 ## Tests

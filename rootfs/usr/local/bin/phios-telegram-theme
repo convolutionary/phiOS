@@ -7,11 +7,12 @@ Builds ~/Downloads/phiOS.tdesktop-theme from HyDE's colours (accent from the the
 colour) with the theme wallpaper, blurred, as the chat background. HyDE runs this on every
 theme change (wallbash template ~/.config/hyde/wallbash/always/telegram.dcol).
 
-Telegram can't be switched from outside: a theme only changes when you pick its file in
-Settings > Chat Settings > (menu) > Choose from file, then press "Keep changes". Passing the
-file on Telegram's command line doesn't work either; that opens the "Forward to" dialog.
-So if Telegram is running this only shows a notification saying where the new theme is.
-It's written to Downloads because Flatpak Telegram builds can only read that folder.
+Pick the file once in Telegram: Settings > Chat Settings > (menu) > Choose from file, then
+"Keep changes". From then on Telegram follows it by itself: Telegram Desktop watches the file
+of the theme in use and re-applies it when it changes (ChatBackground::refreshThemeWatcher),
+so every HyDE theme switch restyles it live. The file is replaced atomically, which that
+watcher handles. It's in Downloads because Flatpak Telegram builds can only read that folder.
+The first time a theme is built while Telegram runs, a notification explains the one-time step.
 
 The colour-to-element map is walogram's constants.tdesktop-theme (MIT), which expects a
 16-colour terminal-style palette (color0..color15) plus lighter/darker/alpha variants.
@@ -204,11 +205,15 @@ def main():
 
     theme = build(args.out)
     print(f"{args.out} ({theme})")
-    if args.notify and telegram_running() and shutil.which("notify-send"):
+    hinted = STATE / "phios/telegram-theme-hinted"
+    if args.notify and not hinted.exists() and telegram_running() and shutil.which("notify-send"):
         subprocess.run(["notify-send", "-a", "phiOS", "-i", "telegram",
-                        f"Telegram theme for {theme} is ready",
-                        "In Telegram: Settings › Chat Settings › ⋮ › Choose from file › "
-                        f"{args.out.name} in Downloads, then Keep changes."])
+                        "Telegram can follow your theme",
+                        "Once: Settings › Chat Settings › ⋮ › Choose from file › "
+                        f"{args.out.name} in Downloads › Keep changes. "
+                        "After that it changes with every theme switch."])
+        hinted.parent.mkdir(parents=True, exist_ok=True)
+        hinted.touch()
 
 
 if __name__ == "__main__":

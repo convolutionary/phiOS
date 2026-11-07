@@ -90,9 +90,7 @@ sw=$(in_root 'cd /tmp && starship prompt 2>&1 >/dev/null')
 grep -q 'phios: default branch' "$H/HyDE/Scripts/themepatcher.sh" && ok "themepatcher patched" || fail "themepatcher patched"
 in_root "env -u XDG_DATA_DIRS zsh -c 'source ~/.config/zsh/conf.d/hyde/env.zsh; print \$XDG_DATA_DIRS'" | grep -q /var/lib/flatpak/exports/share \
     && ok "Flatpak apps reach the launcher (XDG_DATA_DIRS)" || fail "Flatpak apps reach the launcher (XDG_DATA_DIRS)"
-grep -q 'focus_on_activate = true' "$H/.config/hypr/userprefs.conf" && ok "focus_on_activate on" || fail "focus_on_activate on"
 [[ -x "$C/usr/local/bin/phios-raise" ]] && ok "phios-raise installed" || fail "phios-raise installed"
-grep -q 'suppress_event activate activatefocus' "$H/.config/hypr/userprefs.conf" && ok "Telegram can't steal focus" || fail "Telegram can't steal focus"
 grep -q '^backend = "phios"' "$H/.config/hyde/config.toml" && ok "HyDE uses the phios wallpaper backend" || fail "HyDE uses the phios wallpaper backend"
 grep -q 'phios-looks --themes' "$H/.config/hypr/keybindings.conf" && ok "Super+Shift+T opens Looks" || fail "Super+Shift+T opens Looks"
 [[ -f "$H/.config/hyde/wallbash/always/telegram.dcol" ]] && ok "Telegram theme hook installed" || fail "Telegram theme hook installed"
