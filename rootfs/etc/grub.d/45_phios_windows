@@ -1,0 +1,23 @@
+#!/bin/sh
+# Windows entry without os-prober. GRUB finds bootmgfw.efi on whatever ESP has
+# it (the Windows disk) and chainloads it read-only. Nothing gets written there.
+#
+# heads up: if BitLocker is on, booting Windows through GRUB can trigger the
+# recovery-key prompt. Use the firmware boot menu for Windows in that case.
+cat <<'EOF'
+menuentry 'Windows Boot Manager' --class windows --class os {
+    insmod part_gpt
+    insmod fat
+    insmod chain
+    if search --no-floppy --file --set=winesp /EFI/Microsoft/Boot/bootmgfw.efi; then
+        chainloader ($winesp)/EFI/Microsoft/Boot/bootmgfw.efi
+    else
+        echo "Windows Boot Manager not found"
+        sleep 3
+    fi
+}
+menuentry 'UEFI firmware settings' --class efi {
+    fwsetup
+}
+# (Debian's own 30_uefi-firmware is switched off by the installer, this one has an icon)
+EOF

@@ -1,0 +1,31 @@
+// phifetch layout. phifetch picks the logo and colors, this file picks the lines.
+{
+    "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
+    "logo": {
+        "padding": { "top": 1, "left": 2, "right": 4 }
+    },
+    "display": {
+        "separator": "  "
+    },
+    "modules": [
+        "break",
+        "title",
+        "separator",
+        { "type": "os", "key": "os    ", "format": "phiOS · Debian {version-id} {codename}" },
+        { "type": "kernel", "key": "kernel" },
+        { "type": "uptime", "key": "up    " },
+        { "type": "packages", "key": "pkgs  " },
+        { "type": "wm", "key": "wm    " },
+        { "type": "terminal", "key": "term  " },
+        { "type": "cpu", "key": "cpu   " },
+        { "type": "gpu", "key": "gpu   " },
+        { "type": "memory", "key": "mem   " },
+        { "type": "disk", "key": "disk  ", "folders": "/" },
+        "break",
+        { "type": "command", "key": "φ     ", "text": "printf '%s' \"$PHIF_DIGITS\"" },
+        { "type": "command", "key": "fib   ", "text": "printf '%s' \"$PHIF_FIB\"" },
+        { "type": "command", "key": "»     ", "text": "printf '%s' \"$PHIF_FACT\"" },
+        "break",
+        "colors"
+    ]
+}

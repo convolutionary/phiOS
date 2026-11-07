@@ -1,0 +1,225 @@
+#!/bin/bash
+# phifetch: fastfetch where everything is φ. new logo, palette, digits and fact each run.
+#
+#   phifetch                    surprise me
+#   phifetch --logo sunflower   pick one (phifetch --list)
+#   phifetch --palette ember    pick colors (phifetch --list)
+#   phifetch --seed 1618        same output every time
+#   phifetch --print-logo       logo only, no fastfetch
+set -u
+
+DATA=${PHIFETCH_DATA:-/usr/local/share/phifetch}
+PHI=1.6180339887498948482045868343656381177203091798057628621354486227052604628189024497072072041893911374
+GOLDEN_ANGLE=2.399963229728653  # radians, 360°/φ²
+
+pick_logo="" pick_pal="" seed="" print_only=0
+while (($#)); do
+    case $1 in
+        --logo) pick_logo=$2; shift ;;
+        --palette) pick_pal=$2; shift ;;
+        --seed) seed=$2; shift ;;
+        --print-logo) print_only=1 ;;
+        --list) list=1 ;;
+        -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "phifetch: unknown option $1" >&2; exit 2 ;;
+    esac
+    shift
+done
+[[ -n "$seed" ]] && RANDOM=$seed
+seed=${seed:-$RANDOM$RANDOM}
+
+VT=0
+[[ "${TERM:-}" == linux ]] && VT=1
+cols=${COLUMNS:-$(tput cols 2>/dev/null || echo 100)}
+
+# ---------------------------------------------------------------- palettes
+# fastfetch takes raw SGR codes. three slots: main, accent, faint
+declare -A PAL=(
+    [gold]="38;2;236;190;64 38;2;196;132;30 38;2;255;236;170"
+    [aurora]="38;2;110;220;196 38;2;156;124;242 38;2;196;240;230"
+    [sakura]="38;2;242;158;190 38;2;196;118;206 38;2;255;222;234"
+    [ice]="38;2;140;200;255 38;2;88;130;222 38;2;218;238;255"
+    [ember]="38;2;255;142;64 38;2;222;72;60 38;2;255;210;130"
+    [moss]="38;2;150;210;118 38;2;78;152;108 38;2;220;240;180"
+    [dusk]="38;2;250;176;120 38;2;170;100;190 38;2;255;225;200"
+    [mono]="38;2;232;232;238 38;2;150;150;162 38;2;255;255;255"
+)
+VT_PAL=("1;33 0;33 1;37" "1;36 0;34 1;37" "1;35 0;35 1;37" "1;32 0;32 1;37" "1;31 0;33 1;37")
+
+hex_sgr() { # RRGGBB -> 38;2;r;g;b
+    local h=${1#\#}
+    [[ "$h" =~ ^[0-9A-Fa-f]{6}$ ]] || return 1
+    printf '38;2;%d;%d;%d' "0x${h:0:2}" "0x${h:2:2}" "0x${h:4:2}"
+}
+
+# HyDE's current wallbash theme, if there is one
+wallbash_pal() {
+    local f=${XDG_CACHE_HOME:-$HOME/.cache}/hyde/wall.dcol a b c
+    [[ -r "$f" ]] || return 1
+    get() { sed -n "s/^$1=\"\{0,1\}#\{0,1\}\([0-9A-Fa-f]\{6\}\).*/\1/p" "$f" | head -n1; }
+    a=$(hex_sgr "$(get dcol_pry4)") || return 1
+    b=$(hex_sgr "$(get dcol_2xa7)") || b=$a
+    c=$(hex_sgr "$(get dcol_txt1)") || c=$a
+    echo "$a $b $c"
+}
+
+# ---------------------------------------------------------------- generated logos
+
+gen_sunflower() { # phyllotaxis: seed i sits at angle i·137.5°, radius √i
+    awk -v seed="$seed" -v vt="$VT" -v ga="$GOLDEN_ANGLE" 'BEGIN {
+        srand(seed); W = 35; H = 17; cx = (W - 1) / 2; cy = (H - 1) / 2
+        n = int(170 + rand() * 150); rot = rand() * 6.2832
+        split("8 13 21 34", F, " "); arms = F[1 + int(rand() * 4)]
+        sc = (cy - 0.2) / sqrt(n)
+        for (i = 1; i <= n; i++) {
+            r = sqrt(i) * sc; t = i * ga + rot
+            x = int(cx + r * cos(t) * 2 + 0.5); y = int(cy + r * sin(t) + 0.5)
+            if (x < 0 || x >= W || y < 0 || y >= H) continue
+            f = i / n
+            if (vt) ch = (f < 0.3) ? "." : ((f < 0.7) ? "o" : "@")
+            else    ch = (f < 0.25) ? "·" : ((f < 0.6) ? "•" : "●")
+            col = ((i % arms) % 2) ? 1 : 2
+            if (f < 0.12) col = 3
+            g[y, x] = ch; c[y, x] = col
+        }
+        dump(W, H)
+    }
+    function dump(W, H,   x, y, line, cur) {
+        for (y = 0; y < H; y++) {
+            line = ""; cur = 0
+            for (x = 0; x < W; x++) {
+                if ((y, x) in g) { if (c[y, x] != cur) { line = line "$" c[y, x]; cur = c[y, x] }; line = line g[y, x] }
+                else line = line " "
+            }
+            sub(/ +$/, "", line); print line
+        }
+    }'
+}
+
+gen_spiral() { # logarithmic golden spiral r = a·φ^(2θ/π), random turn and handedness
+    awk -v seed="$seed" -v vt="$VT" 'BEGIN {
+        srand(seed); W = 37; H = 17; phi = (1 + sqrt(5)) / 2
+        rot = rand() * 6.2832; hand = (rand() < 0.5) ? 1 : -1
+        tmax = 3.0 * 3.14159265; k = 2 / 3.14159265 * log(phi)
+        np = 0
+        for (t = 0; t <= tmax; t += 0.004) {
+            r = exp(k * (t - tmax)); a = hand * t + rot
+            px[++np] = r * cos(a); py[np] = r * sin(a); pf[np] = t / tmax
+        }
+        minx = 1e9; maxx = -1e9; miny = 1e9; maxy = -1e9
+        for (i = 1; i <= np; i++) {
+            if (px[i] < minx) minx = px[i]; if (px[i] > maxx) maxx = px[i]
+            if (py[i] < miny) miny = py[i]; if (py[i] > maxy) maxy = py[i]
+        }
+        sx = (W - 1) / ((maxx - minx) * 2); sy = (H - 1) / (maxy - miny)
+        s = (sx < sy) ? sx : sy
+        ox = (W - 1 - (maxx - minx) * 2 * s) / 2; oy = (H - 1 - (maxy - miny) * s) / 2
+        for (i = 1; i <= np; i++) {
+            x = int(ox + (px[i] - minx) * 2 * s + 0.5); y = int(oy + (maxy - py[i]) * s + 0.5)
+            f = pf[i]
+            if (vt) ch = (f < 0.5) ? "." : "*"
+            else    ch = (f < 0.35) ? "·" : ((f < 0.75) ? "•" : "●")
+            g[y, x] = ch; c[y, x] = (f < 0.35) ? 3 : ((f < 0.75) ? 1 : 2)
+        }
+        # eye of the spiral
+        x = int(ox + (px[1] - minx) * 2 * s + 0.5); y = int(oy + (maxy - py[1]) * s + 0.5)
+        g[y, x] = "φ"; c[y, x] = 2
+        for (y = 0; y < H; y++) {
+            line = ""; cur = 0
+            for (x = 0; x < W; x++) {
+                if ((y, x) in g) { if (c[y, x] != cur) { line = line "$" c[y, x]; cur = c[y, x] }; line = line g[y, x] }
+                else line = line " "
+            }
+            sub(/ +$/, "", line); print line
+        }
+    }'
+}
+
+# ---------------------------------------------------------------- pick things
+
+# bash counts characters, mawk would count bytes (• is 3)
+logo_width() {
+    local l m=0
+    while IFS= read -r l; do
+        l=${l//\$[1-9]/}
+        ((${#l} > m)) && m=${#l}
+    done <"$1"
+    echo "$m"
+}
+
+LOGOS=(swirl sunflower spiral phi digits fraction)
+((VT)) || LOGOS+=(fibonacci pentagram)
+
+if [[ -n "${list:-}" ]]; then
+    echo "logos:    ${LOGOS[*]}"
+    echo "palettes: ${!PAL[*]} wallbash"
+    exit 0
+fi
+
+tmp=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/phifetch.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
+
+trim_blank() { awk 'NF { f = 1 } f' | tac | awk 'NF { f = 1 } f' | tac; }
+
+make_logo() {
+    case $1 in
+        sunflower) gen_sunflower | trim_blank ;;
+        spiral) gen_spiral | trim_blank ;;
+        swirl) if ((VT)); then cat "$DATA/logos/swirl-vt.txt"; else cat "$DATA/logos/swirl.txt"; fi ;;
+        *) [[ -f "$DATA/logos/$1.txt" ]] || { echo "phifetch: no logo '$1'" >&2; exit 2; }
+           cat "$DATA/logos/$1.txt" ;;
+    esac >"$tmp"
+}
+
+if [[ -n "$pick_logo" ]]; then
+    make_logo "$pick_logo"
+else
+    # shuffle, take the first logo that leaves ~46 columns for the info
+    order=("${LOGOS[@]}")
+    for ((i = ${#order[@]} - 1; i > 0; i--)); do
+        j=$((RANDOM % (i + 1))); t=${order[i]}; order[i]=${order[j]}; order[j]=$t
+    done
+    # the swirl is the actual logo, so it shows up ~40% of the time
+    ((RANDOM % 5 < 2)) && order=(swirl "${order[@]}")
+    for l in "${order[@]}" phi; do
+        make_logo "$l"
+        (($(logo_width "$tmp") + 46 <= cols)) && break
+    done
+fi
+
+if ((print_only)); then
+    sed 's/\$[1-9]//g' "$tmp"
+    exit 0
+fi
+
+if ((VT)); then
+    read -r c1 c2 c3 <<<"${VT_PAL[RANDOM % ${#VT_PAL[@]}]}"
+elif [[ "$pick_pal" == wallbash ]] || { [[ -z "$pick_pal" ]] && ((RANDOM % 3 == 0)) && wallbash_pal >/dev/null; }; then
+    read -r c1 c2 c3 <<<"$(wallbash_pal || echo "${PAL[gold]}")"
+else
+    if [[ -z "$pick_pal" ]]; then
+        names=("${!PAL[@]}")
+        pick_pal=${names[RANDOM % ${#names[@]}]}
+    fi
+    [[ -n "${PAL[$pick_pal]:-}" ]] || { echo "phifetch: no palette '$pick_pal'" >&2; exit 2; }
+    read -r c1 c2 c3 <<<"${PAL[$pick_pal]}"
+fi
+
+# ---------------------------------------------------------------- the φ lines
+
+nd=$((12 + RANDOM % 49))
+export PHIF_DIGITS="${PHI:0:nd}…  ($((nd - 2)) digits)"
+
+n=$((20 + RANDOM % 60))
+a=0 b=1
+for ((i = 0; i < n; i++)); do t=$((a + b)); a=$b; b=$t; done
+ratio=$(awk -v a="$b" -v b="$a" 'BEGIN { printf "%.15f", a / b }')
+export PHIF_FIB="F($((n + 1)))/F($n) = $ratio"
+
+mapfile -t facts < <(grep -v '^[[:space:]]*\(#\|$\)' "$DATA/facts.txt")
+export PHIF_FACT=${facts[RANDOM % ${#facts[@]}]}
+
+exec fastfetch -c "$DATA/config.jsonc" \
+    --logo "$tmp" --logo-type file \
+    --logo-color-1 "$c1" --logo-color-2 "$c2" --logo-color-3 "$c3" \
+    --color-keys "$c1" --color-title "$c2"

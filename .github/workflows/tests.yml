@@ -1,0 +1,47 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -q && sudo apt-get install -y -q shellcheck
+      - run: >
+          shellcheck -x -S warning -e SC1091
+          install.sh lib/ui.sh lib/chroot-setup.sh hyde/*.sh usb/make-usb.sh
+          rootfs/usr/local/bin/phifetch rootfs/usr/local/bin/phios-hyde
+          rootfs/etc/profile.d/phifetch.sh rootfs/etc/grub.d/45_phios_windows
+          rootfs/etc/grub.d/00_early_phios tests/*.sh
+
+  powershell:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: parse, and stay pure ASCII for Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $bad = 0
+          foreach ($f in 'usb/make-usb.ps1', 'windows/preflight.ps1') {
+            $t = $null; $e = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$t, [ref]$e)
+            if ($e) { $e | ForEach-Object { Write-Host "$f:$($_.Extent.StartLineNumber) $($_.Message)" }; $bad++ }
+            if ([IO.File]::ReadAllBytes((Resolve-Path $f)) | Where-Object { $_ -gt 127 }) { Write-Host "$f has non-ASCII bytes"; $bad++ }
+          }
+          exit $bad
+
+  debian:
+    # guard, UI, phifetch and USB-maker suites from a Debian 13 userland, like the live USB.
+    # the full install and the Secure Boot VM boot need KVM and ~10 min; run those locally
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: debootstrap + a keyring that knows trixie
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q debootstrap
+          curl -fsSLO https://deb.debian.org/debian/pool/main/d/debian-archive-keyring/debian-archive-keyring_2025.1_all.deb
+          sudo dpkg -i debian-archive-keyring_2025.1_all.deb
+      - run: sudo bash tests/debian-host.sh test_guard.sh test_ui.sh test_phifetch.sh test_usb.sh

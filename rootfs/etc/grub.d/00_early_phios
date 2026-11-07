@@ -1,0 +1,8 @@
+#!/bin/sh
+# runs before 00_header. Debian's signed GRUB has all_video built in but doesn't set
+# feature_all_video_module, so load_video falls back to insmod-ing five legacy video
+# drivers one by one. Secure Boot refuses each ("prohibited by secure boot policy") and
+# GRUB pauses on "Press any key to continue" every boot. Point it at the built-in one.
+cat <<'EOF'
+set feature_all_video_module=y
+EOF

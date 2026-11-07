@@ -1,0 +1,28 @@
+# one per line, keep them short enough to sit next to a logo
+φ² = φ + 1
+1/φ = φ − 1 = 0.6180339887…
+φ = (1 + √5) / 2
+φ = 1 + 1/φ
+φ is a root of x² − x − 1
+φ = √(1 + √(1 + √(1 + …)))
+φ = [1; 1, 1, 1, …], the slowest continued fraction
+no number is harder to approximate with fractions
+F(n+1)/F(n) → φ
+the golden angle is 360°/φ² = 137.5077…°
+sunflowers place each seed 137.5° past the last
+spiral counts on a sunflower are Fibonacci numbers
+a pentagram's lines cut each other in ratio φ
+a regular pentagon's diagonal is φ times its side
+cos(36°) = φ / 2
+φ = 2·sin(54°)
+ln φ = asinh(1/2)
+in base φ, 2 is written 10.01
+F(n) and F(n+1) never share a factor
+144 is the only Fibonacci square above 1
+Zeckendorf: every n is a sum of non-adjacent F(k)
+Lucas numbers: L(n) = F(n−1) + F(n+1)
+F(n) = (φⁿ − (−1/φ)ⁿ) / √5
+a golden rectangle minus a square is golden again
+Penrose tiles: thick and thin rhombs come in ratio φ
+an icosahedron's vertices: (0, ±1, ±φ) and rotations
+Euclid called it "extreme and mean ratio"

@@ -1,0 +1,3 @@
+#!/bin/bash
+# phiOS stage 2 entry point
+exec /usr/local/share/phios/hyde/hyde-port.sh "$@"

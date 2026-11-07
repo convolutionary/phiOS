@@ -1,0 +1,3 @@
+# stable /dev/dri names for Hyprland's AQ_DRM_DEVICES (card0/card1 order isn't fixed)
+KERNEL=="card*", SUBSYSTEM=="drm", DRIVERS=="nvidia", SYMLINK+="dri/phios-dgpu"
+KERNEL=="card*", SUBSYSTEM=="drm", DRIVERS=="amdgpu", SYMLINK+="dri/phios-igpu"

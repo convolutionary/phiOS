@@ -1,0 +1,5 @@
+// security updates install themselves daily. NVIDIA's repo is not in the
+// allowed origins, so driver updates stay manual (apt upgrade).
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";
