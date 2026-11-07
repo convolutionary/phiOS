@@ -8,7 +8,7 @@ jobs:
   shellcheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: sudo apt-get update -q && sudo apt-get install -y -q shellcheck
       - run: >
           shellcheck -x -S warning -e SC1091
@@ -20,7 +20,7 @@ jobs:
   powershell:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: parse, and stay pure ASCII for Windows PowerShell 5.1
         shell: powershell
         run: |
@@ -28,7 +28,7 @@ jobs:
           foreach ($f in 'usb/make-usb.ps1', 'windows/preflight.ps1') {
             $t = $null; $e = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$t, [ref]$e)
-            if ($e) { $e | ForEach-Object { Write-Host "$f:$($_.Extent.StartLineNumber) $($_.Message)" }; $bad++ }
+            if ($e) { $e | ForEach-Object { Write-Host "${f}:$($_.Extent.StartLineNumber) $($_.Message)" }; $bad++ }
             if ([IO.File]::ReadAllBytes((Resolve-Path $f)) | Where-Object { $_ -gt 127 }) { Write-Host "$f has non-ASCII bytes"; $bad++ }
           }
           exit $bad
@@ -38,7 +38,7 @@ jobs:
     # the full install and the Secure Boot VM boot need KVM and ~10 min; run those locally
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: debootstrap + a keyring that knows trixie
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q debootstrap

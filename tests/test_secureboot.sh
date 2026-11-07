@@ -49,6 +49,7 @@ grep -qi 'secure' "$SB/vars.log" && ok "NVRAM: Microsoft KEK/db enrolled, Secure
 # kernel early, and Secure Boot firmware needs SMM. TCG emulates SMM properly, just slower.
 # PHI_SB_ACCEL=kvm on bare-metal Linux hosts.
 ACCEL=${PHI_SB_ACCEL:-tcg}
+# shellcheck disable=SC2054  # "tcg,thread=multi" is one qemu argument, not two array elements
 if [[ "$ACCEL" == kvm ]]; then ACC=(-enable-kvm -cpu host); SLOW=1; else ACC=(-accel tcg,thread=multi -cpu max); SLOW=6; fi
 
 boot_vm() { # image vars log shotdir timeout
