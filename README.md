@@ -224,6 +224,8 @@ Behind it are `phios-wall` (the same thing from the command line) and a HyDE wal
 
 Telegram Desktop and AyuGram follow the theme too. Every theme switch rebuilds `~/Downloads/phiOS.tdesktop-theme` from the theme's colours and wallpaper. Pick that file once in Telegram (Settings › Chat Settings › ⋮ › Choose from file, then **Keep changes**); Telegram watches the file of the theme it's using and re-applies it whenever it changes, so from then on it restyles itself with every switch. The colour map comes from [walogram](https://zff.dev/adoyle/walogram) (MIT).
 
+Spotify follows it as well when [spicetify](https://spicetify.app) is installed: the first theme switch sets it up with HyDE's Sleek theme and the theme's colours, later switches refresh them (`phios-spicetify-theme`, which replaces HyDE's hook: that one can't find spicetify or Flatpak Spotify's settings on Debian). A running Spotify shows the new colours when it next starts. For a system-wide Flatpak Spotify, spicetify needs write access to Spotify's folder once (it says how).
+
 ## The HyDE port
 
 HyDE officially supports Arch only. `phios-hyde`:

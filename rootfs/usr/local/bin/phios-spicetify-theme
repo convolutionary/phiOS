@@ -1,0 +1,91 @@
+#!/bin/bash
+# phios-spicetify-theme: Spotify follows the HyDE theme through spicetify.
+#
+# HyDE runs this after writing ~/.config/spicetify/Themes/Sleek/color.ini from the theme's
+# colours (wallbash template ~/.config/hyde/wallbash/always/spotify.dcol). It replaces HyDE's
+# own wallbash/scripts/spotify.sh, which on Debian:
+#   - can't find spicetify (its installer puts it in ~/.spicetify, not on PATH),
+#   - points Flatpak Spotify's prefs_path at ~/.config/spotify/prefs, which Flatpak never reads,
+#   - asks for a password (pkexec) on every theme switch if Spotify's folder isn't writable.
+#
+# First run: Sleek theme + "Wallbash" colour scheme, backup, apply. After that: spicetify refresh
+# (new colours into Spotify's files), and if Spotify is running with a DevTools port on
+# localhost:9222 (spicetify's live reload), reload it in place. Otherwise the new colours show
+# the next time Spotify starts.
+set -u
+
+log() { printf '[spicetify] %s\n' "$*"; }
+notify_once() { # key title body
+    local mark="${XDG_STATE_HOME:-$HOME/.local/state}/phios/spicetify-$1"
+    [[ -e "$mark" ]] && return 0
+    mkdir -p "$(dirname "$mark")" && touch "$mark"
+    command -v notify-send >/dev/null && notify-send -a phiOS -i spotify "$2" "$3"
+}
+
+spicetify=$(command -v spicetify || true)
+[[ -z "$spicetify" && -x "$HOME/.spicetify/spicetify" ]] && spicetify="$HOME/.spicetify/spicetify"
+[[ -n "$spicetify" ]] || exit 0   # spicetify not installed: nothing to theme
+
+# where Spotify lives, and where it keeps prefs
+data=${XDG_DATA_HOME:-$HOME/.local/share}
+flatpak_dir=app/com.spotify.Client/x86_64/stable/active/files/extra/share/spotify
+if [[ -n "${SPOTIFY_PATH:-}" ]]; then
+    spotify_path=$SPOTIFY_PATH prefs="$HOME/.config/spotify/prefs"
+elif [[ -d "$data/flatpak/$flatpak_dir" ]]; then
+    spotify_path="$data/flatpak/$flatpak_dir" prefs="$HOME/.var/app/com.spotify.Client/config/spotify/prefs"
+elif [[ -d "/var/lib/flatpak/$flatpak_dir" ]]; then
+    spotify_path="/var/lib/flatpak/$flatpak_dir" prefs="$HOME/.var/app/com.spotify.Client/config/spotify/prefs"
+elif [[ -f "$data/spotify-launcher/install/usr/bin/spotify" ]]; then
+    spotify_path="$data/spotify-launcher/install/usr/share/spotify" prefs="$HOME/.config/spotify/prefs"
+elif [[ -d /opt/spotify ]]; then
+    spotify_path=/opt/spotify prefs="$HOME/.config/spotify/prefs"
+else
+    exit 0   # no Spotify
+fi
+# keep Flatpak's "active" link: the folder behind it is replaced on every Spotify update
+
+if [[ ! -w "$spotify_path" || ! -w "$spotify_path/Apps" ]]; then
+    log "Spotify's folder isn't writable: $spotify_path"
+    notify_once unwritable "Spotify can't follow your theme yet" \
+        "spicetify needs to write into Spotify. Once: sudo chmod a+wr '$spotify_path' && sudo chmod -R a+wr '$spotify_path/Apps'"
+    exit 0
+fi
+if [[ ! -f "$prefs" ]]; then
+    notify_once noprefs "Start Spotify once" "Spotify follows your theme after it has run and been logged in once."
+    exit 0
+fi
+
+# HyDE's Sleek theme (color.ini is ours, written by wallbash; the rest comes from HyDE)
+themes="$HOME/.config/spicetify/Themes"
+if [[ ! -f "$themes/Sleek/user.css" ]]; then
+    arc=""
+    for a in "${HYDE_DIR:-$HOME/HyDE}/Source/arcs/Spotify_Sleek.tar.gz" "$HOME/.cache/hyde/landing/Spotify_Sleek.tar.gz"; do
+        [[ -f "$a" ]] && arc=$a && break
+    done
+    if [[ -z "$arc" ]]; then
+        log "no Spotify_Sleek.tar.gz from HyDE"
+        exit 0
+    fi
+    mkdir -p "$themes"
+    tar -xzf "$arc" -C "$themes"
+fi
+
+get() { "$spicetify" config "$1" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | tail -n1 | tr -d '[:space:]'; }
+
+if [[ "$(get current_theme)" != Sleek || "$(get color_scheme)" != Wallbash ]]; then
+    log "first run: Sleek + Wallbash colours"
+    "$spicetify" -q config spotify_path "$spotify_path" prefs_path "$prefs" \
+        current_theme Sleek color_scheme Wallbash inject_css 1 replace_colors 1
+    # apply fails until there's a backup of the untouched Spotify; backup fails if one exists
+    "$spicetify" -q backup apply >/dev/null 2>&1 || "$spicetify" -q apply
+else
+    "$spicetify" -q refresh
+fi
+
+# live reload: only when Spotify exposes DevTools on localhost (spicetify's -l mechanism)
+if pgrep -x spotify >/dev/null && curl -s -m 1 http://127.0.0.1:9222/json/version >/dev/null 2>&1; then
+    timeout 8 "$spicetify" -q watch -s -l >/dev/null 2>&1 &
+    sleep 1.5
+    touch "$themes/Sleek/color.ini"   # wake the watcher: it refreshes and reloads Spotify
+fi
+exit 0

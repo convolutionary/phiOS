@@ -94,7 +94,9 @@ in_root "env -u XDG_DATA_DIRS zsh -c 'source ~/.config/zsh/conf.d/hyde/env.zsh; 
 grep -q '^backend = "phios"' "$H/.config/hyde/config.toml" && ok "HyDE uses the phios wallpaper backend" || fail "HyDE uses the phios wallpaper backend"
 grep -q 'phios-looks --themes' "$H/.config/hypr/keybindings.conf" && ok "Super+Shift+T opens Looks" || fail "Super+Shift+T opens Looks"
 [[ -f "$H/.config/hyde/wallbash/always/telegram.dcol" ]] && ok "Telegram theme hook installed" || fail "Telegram theme hook installed"
-for b in phios-looks phios-wall wallpaper.phios.sh phios-telegram-theme; do
+head -1 "$H/.config/hyde/wallbash/always/spotify.dcol" 2>/dev/null | grep -q '|phios-spicetify-theme$' && [[ -f "$H/.config/spicetify/Themes/Sleek/user.css" ]] \
+    && ok "Spotify (spicetify) theme hook installed" || fail "Spotify (spicetify) theme hook installed"
+for b in phios-looks phios-wall wallpaper.phios.sh phios-telegram-theme phios-spicetify-theme; do
     [[ -x "$C/usr/local/bin/$b" ]] && ok "$b installed" || fail "$b installed"
 done
 in_root 'python3 -c "import gi; gi.require_version(\"Gtk\", \"4.0\"); gi.require_version(\"Adw\", \"1\"); from gi.repository import Gtk, Adw"' \

@@ -439,6 +439,16 @@ EOF
     # Telegram / AyuGram theme rebuilt from the HyDE colours on every theme change
     mkdir -p "$HOME/.config/hyde/wallbash/always"
     cp "$PHI_DIR/hyde/wallbash/telegram.dcol" "$HOME/.config/hyde/wallbash/always/telegram.dcol"
+
+    # Spotify (spicetify) follows the theme. HyDE only renders a template whose target folder
+    # exists, so Sleek has to be there before the first theme switch; and its hook script can't
+    # find spicetify or Flatpak Spotify's prefs on Debian, so ours runs instead
+    mkdir -p "$HOME/.config/spicetify/Themes"
+    if [[ -f "$HYDE_DIR/Source/arcs/Spotify_Sleek.tar.gz" && ! -f "$HOME/.config/spicetify/Themes/Sleek/user.css" ]]; then
+        tar -xzf "$HYDE_DIR/Source/arcs/Spotify_Sleek.tar.gz" -C "$HOME/.config/spicetify/Themes"
+    fi
+    f=$HOME/.config/hyde/wallbash/always/spotify.dcol
+    [[ -f "$f" ]] && sed -i '1s/|.*$/|phios-spicetify-theme/' "$f"
 }
 
 wallpaper() {
