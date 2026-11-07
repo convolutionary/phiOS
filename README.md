@@ -221,7 +221,8 @@ HyDE officially supports Arch only. `phios-hyde`:
 4. runs HyDE's own restore scripts, with `pacman -Q` swapped for a Debian package check. It never runs HyDE's pacman, AUR or GRUB steps;
 5. runs `Hyprland --verify-config` and comments out any line using an option 0.55 removed, logging each change;
 6. ports HyDE's SDDM login theme to Qt6, and only switches to it if the greeter loads it without errors;
-7. points Hyprland at the NVIDIA GPU even when the CPU's integrated graphics are enabled.
+7. imports the ~58 community themes from [hyde-gallery](https://github.com/HyDE-Project/hyde-gallery) on top of HyDE's 12 (skip with `--no-gallery`);
+8. points Hyprland at the NVIDIA GPU even when the CPU's integrated graphics are enabled.
 
 HyDE bugs it works around, all found by running it on Debian:
 
@@ -232,6 +233,15 @@ HyDE bugs it works around, all found by running it on Debian:
 | HyDE's Python env compiles PyGObject | build fails without headers | installs `libgirepository-2.0-dev`, `libcairo2-dev` and `python3-dev` |
 | the SDDM theme has no `metadata.desktop` and reads `config.Font` while `theme.conf` says `font` | the Qt6 greeter won't load it | writes the metadata and adds the key |
 | `dwindle:pseudotile` is gone in Hyprland 0.55 | config error | commented out by the verify step |
+| `idle_inhibit fullscreen true` window rules | 0.55 rejects the mode; red error banner on every start | drops the `true` (`--verify-config` doesn't check rules) |
+| `resetxdgportal.sh` starts the portals from Arch's `/usr/lib` | portals are killed and never restarted: no screen sharing or file pickers, "File not found" popups | uses Debian's `/usr/libexec` |
+| Debian enables `waybar`, `hypridle`, `hyprpolkitagent`, `hyprsunset` as global user units, and HyDE starts them too | two bars, two idle daemons, two polkit agents | `systemctl --global disable` on the Debian units |
+| `hyprsunset.conf` has one 18:00 / 3000K profile and nothing to undo it | screen stays warm all day | neutral by default; the waybar toggle still works |
+| zsh plugins load through oh-my-zsh, an AUR package | "No plugin system found", no prompt, no Ctrl+arrow word jumps | `plugin.zsh` loads Debian's autosuggestions and syntax highlighting, sets oh-my-zsh's key bindings and Esc Esc for sudo |
+| `user.zsh` has no trailing newline | phiOS's own `alias phi=` landed as `fialias`, a parse error | adds the newline first |
+| the starship prompt uses the Arch logo and a `[cpp]` module | Debian's starship 1.22 has no `cpp`, warns on every prompt | gold φ, `cpp` removed |
+| theme switching writes GTK theme and dark/light through `dconf` | not installed on Debian, so dark/light and icons never change | installs `dconf-cli` |
+| `themepatcher.sh` lists branches through the GitHub API and caches clones as `<branch>-<owner>` | the 60 requests/hour limit runs out mid-gallery, and two themes by the same author overwrite each other | asks `git ls-remote` for the default branch, cache dir per repo |
 
 ## Tests
 

@@ -72,14 +72,30 @@ in_root 'waybar --version' | grep -q '0\.1[0-9]' && ok "waybar: $(in_root 'wayba
 [[ -f "$H/.config/waybar/config.jsonc" || -f "$H/.config/waybar/config" ]] && ok "waybar config deployed" || fail "waybar config deployed"
 n=$(find "$H/.config/hyde/themes" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
 ((n >= 5)) && ok "$n HyDE themes installed" || fail "HyDE themes installed" "found $n"
+# 12 defaults + the hyde-gallery themes; a few third-party repos may be gone, so not all 70
+((n >= 40)) && ok "hyde-gallery themes imported" || fail "hyde-gallery themes imported" "found $n, expected 40+"
 # a theme folder with only wallpapers means the patcher silently skipped its config files
 m=$(find "$H/.config/hyde/themes" -mindepth 2 -maxdepth 2 -name hypr.theme 2>/dev/null | wc -l)
 ((m >= 5)) && ok "$m themes have their hypr.theme" || fail "themes have their hypr.theme" "found $m"
 [[ -n "$(find "$H/.local/share/fonts" -iname '*jetbrains*' -print -quit 2>/dev/null)" ]] && ok "HyDE fonts extracted" || fail "HyDE fonts extracted"
 [[ -f "$H/.config/uwsm/env-hyprland.d/50-phios-gpu.sh" ]] && ok "NVIDIA session env" || fail "NVIDIA session env"
 grep -q phifetch "$H/.config/zsh/user.zsh" 2>/dev/null && ok "zsh shows phifetch" || fail "zsh shows phifetch"
+zout=$(in_root 'zsh -i -c true' 2>&1)
+! grep -qiE 'parse error|No plugin system' <<<"$zout" && ok "interactive zsh starts clean" || fail "interactive zsh starts clean" "$(grep -iE 'parse error|No plugin system' <<<"$zout" | head -n 3)"
+in_root "zsh -i -c 'bindkey' 2>/dev/null" | grep -qF '"^[[1;5C" forward-word' && ok "zsh Ctrl+arrow word jumps" || fail "zsh Ctrl+arrow word jumps"
+sw=$(in_root 'cd /tmp && starship prompt 2>&1 >/dev/null')
+[[ -z "$sw" ]] && ok "starship config has no warnings" || fail "starship config has no warnings" "$(head -n 3 <<<"$sw")"
+! grep -qP '\x{F08C7}' "$H/.config/starship/starship.toml" && ok "prompt shows φ, not the Arch logo" || fail "prompt shows φ, not the Arch logo"
+[[ -x "$C/usr/bin/dconf" ]] && ok "dconf installed (theme dark/light switching)" || fail "dconf installed"
+grep -q 'phios: default branch' "$H/HyDE/Scripts/themepatcher.sh" && ok "themepatcher patched" || fail "themepatcher patched"
 [[ "$(getent -s files passwd phi 2>/dev/null || grep '^phi:' "$C/etc/passwd")" == *zsh ]] && ok "login shell zsh" || fail "login shell zsh"
 [[ -f "$H/.local/share/phios/phios-golden.png" ]] && ok "phiOS wallpaper rendered" || fail "phiOS wallpaper rendered"
+# --verify-config doesn't evaluate window rules, so these regressions need their own checks
+! grep -q 'idle_inhibit [a-z]* true' "$H/.config/hypr/windowrules.conf" && ok "idle_inhibit rules use 0.55 syntax" || fail "idle_inhibit rules use 0.55 syntax"
+grep -q 'libDir=/usr/libexec' "$H/.local/lib/hyde/resetxdgportal.sh" && ok "portal reset uses /usr/libexec" || fail "portal reset uses /usr/libexec"
+! grep -q 'temperature = 3000' "$H/.config/hypr/hyprsunset.conf" && ok "no blue-light filter by default" || fail "no blue-light filter by default"
+dup=$(find "$C/etc/systemd/user/graphical-session.target.wants" -name 'waybar.service' -o -name 'hypridle.service' -o -name 'hyprpolkitagent.service' -o -name 'hyprsunset.service' 2>/dev/null)
+[[ -z "$dup" ]] && ok "no duplicate Debian autostarts" || fail "no duplicate Debian autostarts" "$dup"
 
 # the big unknown: does Debian's Hyprland 0.55 accept HyDE's config?
 out=$(in_root 'Hyprland --verify-config -c ~/.config/hypr/hyprland.conf')

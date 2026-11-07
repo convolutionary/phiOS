@@ -15,21 +15,24 @@ HYDE_REPO=https://github.com/HyDE-Project/HyDE
 HYDE_TAG=v26.03.30
 HYDE_SHA=2842b98ca627bd49390062a64e3aa3572cb4bccd   # last release on the hyprlang config Hyprland 0.55 reads
 HYDE_DIR=${HYDE_DIR:-$HOME/HyDE}
+GALLERY_SHA=1123b74d61c0041b97ff5720b5c80bb190477550   # HyDE-Project/hyde-gallery, 70 themes
 SRC=$HOME/.local/src/phios
 LOG=${PHI_LOG:-$HOME/.cache/phios/hyde-port.log}
-BUILD=1 SDDM_THEME=1 WAYBAR_SRC=1
+BUILD=1 SDDM_THEME=1 WAYBAR_SRC=1 GALLERY=1
 
 while (($#)); do
     case $1 in
         --no-build) BUILD=0 ;;
         --no-sddm-theme) SDDM_THEME=0 ;;
         --debian-waybar) WAYBAR_SRC=0 ;;
+        --no-gallery) GALLERY=0 ;;
         -h|--help)
             cat <<EOF
-usage: phios-hyde [--no-build] [--no-sddm-theme] [--debian-waybar]
+usage: phios-hyde [--no-build] [--no-sddm-theme] [--debian-waybar] [--no-gallery]
   --no-build        skip compiling awww, satty, wl-clip-persist, waybar
   --no-sddm-theme   keep Debian's login screen
   --debian-waybar   use Debian's waybar 0.12 instead of building 0.15
+  --no-gallery      only HyDE's 12 default themes, skip the ~58 from hyde-gallery
 EOF
             exit 0 ;;
         *) die "unknown option $1" ;;
@@ -55,6 +58,8 @@ APT_MAIN=(
     xdg-desktop-portal-gtk xdg-user-dirs xdg-utils parallel jq imagemagick librsvg2-bin
     qt5-image-formats-plugins qt6-image-formats-plugins kimageformat-plugins ffmpegthumbs kde-cli-tools
     libnotify-bin fonts-noto-color-emoji fontconfig
+    # HyDE sets GTK theme, icons and dark/light through dconf; Arch pulls it in with GTK
+    dconf-cli
     # theming
     nwg-look qt5ct qt6ct qt-style-kvantum qtwayland5 qt6-wayland xsettingsd
     # apps
@@ -209,6 +214,8 @@ get_hyde() {
     # Debian-aware package checks; HyDE's own definition gets overridden because this loads last
     local gf="$HYDE_DIR/Scripts/global_fn.sh"
     grep -q phios "$gf" || printf '\n# phiOS: debian package checks\nsource %q\n' "$PHI_DIR/hyde/pkgcompat.sh" >>"$gf"
+    # theme imports: no GitHub API rate limit, one cache dir per repo (details in the script)
+    python3 -I "$PHI_DIR/hyde/patch-themepatcher.py" "$HYDE_DIR/Scripts/themepatcher.sh"
 }
 
 restore_hyde() {
@@ -223,10 +230,88 @@ restore_hyde() {
     # -r: fonts, configs, themes, wallpaper cache. never -i (pacman). the trailing prompt asks to reboot
     say "HyDE restore: fonts, configs, themes (downloads ~20 themes)"
     (cd "$HYDE_DIR/Scripts" && echo n | ./install.sh -r)
+    debian_fixups
     heal_hypr_config
+    if ((GALLERY)); then gallery_themes; fi
     # HyDE's -s does "enable --now"; enabling is all we need, they start on the next boot
     say "enabling NetworkManager, bluetooth, sddm"
     sudo systemctl enable NetworkManager.service bluetooth.service sddm.service
+}
+
+# HyDE's installer only imports the 12 themes in themepatcher.lst. The rest of the
+# community gallery (each theme is its own repo) goes through the same themepatcher.sh.
+# A theme that fails to import is logged and skipped; it never stops the install
+gallery_themes() {
+    local json list n
+    json=$(retry curl -fsSL "https://raw.githubusercontent.com/HyDE-Project/hyde-gallery/$GALLERY_SHA/hyde-themes.json") \
+        || { say "couldn't fetch the HyDE theme gallery, keeping the default themes"; return 0; }
+    list=$(mktemp)
+    # skip what's already installed and anything that isn't a plain https link
+    jq -r '.[] | select(.LINK | startswith("https://")) | select((.THEME + .LINK) | contains("\"") | not)
+        | "\"\(.THEME | gsub("^\\s+|\\s+$"; ""))\" \"\(.LINK)\""' <<<"$json" \
+        | while IFS= read -r n; do
+            local name=${n#\"}; name=${name%%\"*}
+            [[ -d "$XDG_CONFIG_HOME/hyde/themes/$name" ]] || printf '%s\n' "$n"
+        done >"$list"
+    say "HyDE gallery: $(wc -l <"$list") more themes (third-party repos, this takes a while)"
+    (cd "$HYDE_DIR/Scripts" && ./restore_thm.sh "$list") >>"$LOG" 2>&1 || say "some gallery themes failed to import (see log)"
+    rm -f "$list"
+    # same wallpaper cache step HyDE's install.sh runs after its own themes
+    PATH="$HOME/.local/lib/hyde:$HOME/.local/bin:$PATH" "$HOME/.local/lib/hyde/wallpaper/cache.sh" commence -t "" >>"$LOG" 2>&1 || true
+    say "$(find "$XDG_CONFIG_HOME/hyde/themes" -mindepth 1 -maxdepth 1 -type d | wc -l) HyDE themes installed"
+}
+
+# things HyDE gets wrong on Debian / Hyprland 0.55 that aren't "option does not exist" errors
+debian_fixups() {
+    local f
+    # 0.55's idle_inhibit takes one mode ("fullscreen"); HyDE writes "fullscreen true", which
+    # 0.55 rejects with "unknown mode" and puts a red error banner on screen
+    f=$HOME/.config/hypr/windowrules.conf
+    [[ -f "$f" ]] && sed -i 's/\(idle_inhibit [a-z]*\) true\b/\1/' "$f"
+
+    # resetxdgportal.sh hardcodes Arch's /usr/lib; Debian keeps the portals in /usr/libexec.
+    # without this, the portals are killed and never restarted (screen sharing, file pickers)
+    f=$HOME/.local/lib/hyde/resetxdgportal.sh
+    if [[ -f "$f" ]] && ! grep -q /usr/libexec "$f"; then
+        sed -i 's|^\(\s*\)libDir=/usr/lib$|\1libDir=/usr/libexec|' "$f"
+    fi
+
+    # HyDE's hyprsunset.conf has a single 18:00 / 3000K profile. With nothing to switch back
+    # at sunrise it stays warm all day. Start neutral; the waybar toggle still turns it on
+    f=$HOME/.config/hypr/hyprsunset.conf
+    if [[ -f "$f" ]] && grep -q 'temperature = 3000' "$f"; then
+        cat >"$f" <<'EOF'
+max-gamma = 150
+
+# phiOS: no colour shift by default. Toggle the blue-light filter from waybar / hyde-shell hyprsunset.
+profile {
+    time = 00:00
+    identity = true
+}
+EOF
+    fi
+
+    # HyDE's starship prompt opens with the Arch logo glyph; phiOS gets a gold φ. Debian's
+    # starship (1.22) has no cpp module, so its [cpp] block warns on every prompt
+    f=$HOME/.config/starship/starship.toml
+    if [[ -f "$f" ]]; then
+        python3 -I - "$f" <<'EOF'
+import re, sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+s = s.replace("\U000F08C7 \\", "[φ](bold fg:#ECBE40) \\", 1)
+s = re.sub(r"^\$cpp\\\n", "", s, flags=re.M)
+s = re.sub(r"\n\[cpp\]\n(?:[^\[\n].*\n)*", "\n", s)
+open(p, "w", encoding="utf-8").write(s)
+EOF
+    fi
+    f=$HOME/.config/fastfetch/config.jsonc
+    [[ -f "$f" ]] && sed -i 's/"  󰣇 OS"/"  φ OS"/' "$f"
+
+    # Debian enables these as global systemd user units, and HyDE also starts each one from
+    # its exec-once list. Leaving both on gives two bars, two idle daemons, two polkit agents
+    say "disabling Debian's autostart for waybar, hypridle, hyprpolkitagent, hyprsunset (HyDE starts them)"
+    sudo systemctl --global disable waybar.service hypridle.service hyprpolkitagent.service hyprsunset.service 2>/dev/null || true
 }
 
 # HyDE v26.03.30 was written for Hyprland 0.54; Debian has 0.55, which dropped a few
@@ -272,8 +357,21 @@ glue() {
         [[ -f "$f" ]] || continue
         sed -i 's/fastfetch --logo-type kitty$/phifetch/; s/fastfetch=.fastfetch --logo-type kitty./fastfetch='"'"'phifetch'"'"'/' "$f"
     done
-    grep -q 'alias phi=' "$HOME/.config/zsh/user.zsh" 2>/dev/null \
-        || echo "alias phi='phifetch'" >>"$HOME/.config/zsh/user.zsh"
+    f=$HOME/.config/zsh/user.zsh
+    # HyDE's user.zsh has no trailing newline; appending straight on gives "fialias phi=..."
+    sed -i 's/^fialias phi=/fi\nalias phi=/' "$f" 2>/dev/null || true
+    if ! grep -q 'alias phi=' "$f" 2>/dev/null; then
+        [[ -s "$f" && -n "$(tail -c1 "$f")" ]] && echo >>"$f"
+        echo "alias phi='phifetch'" >>"$f"
+    fi
+
+    # HyDE loads zsh plugins through oh-my-zsh (an AUR package on Arch). Debian has none, so
+    # every shell printed "No plugin system found". Load Debian's packaged plugins instead,
+    # but only over HyDE's stub (the one that starts with "return 1"), never a user's own file
+    f=$HOME/.config/zsh/plugin.zsh
+    if [[ ! -f "$f" ]] || grep -q '^return 1' "$f"; then
+        cp "$PHI_DIR/hyde/plugin.zsh" "$f"
+    fi
 
     # phiOS wallpaper into every installed HyDE theme
     wallpaper
