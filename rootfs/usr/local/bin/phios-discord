@@ -1,0 +1,345 @@
+#!/bin/bash
+# phios-discord: Discord with Equicord, plus sealed Equicord profiles for separate accounts.
+#
+#   phios-discord                       Discord + Equicord (re-patches Equicord after Discord updates itself)
+#   phios-discord new NAME [--proxy P]  make a sealed profile (and its app-menu entry)
+#   phios-discord run NAME [args...]    start a profile
+#   phios-discord proxy NAME [P|off]    show or change a profile's proxy
+#   phios-discord list | rm NAME        list / delete profiles
+#   phios-discord install | update      install or update Discord, Equicord and Equibop (no root needed)
+#
+# A profile is Equibop (Equicord's own client) inside bubblewrap with:
+#   - its own home: its own Discord login, cookies, local storage, cache, Equicord settings and
+#     plugins. Your real home, and every other profile, are hidden from it.
+#   - its own /tmp and process list: it can't see your other apps or other Discord instances
+#     (so no shared RPC socket and no game/process detection across profiles).
+#   - its own random machine-id.
+#   - optionally its own proxy, e.g. a Mullvad server's SOCKS5 (only reachable while Mullvad
+#     is connected): --proxy socks5://se-sto-wg-socks5-001.relays.mullvad.net:1080
+#     WebRTC is then limited to the proxy, so voice/video can't leak your real exit IP
+#     (they won't connect at all: SOCKS5 here can't carry Discord's UDP voice).
+# Shared with your desktop on purpose: the screen (Wayland), sound (PipeWire), notifications and
+# the tray (D-Bus), fonts, icons and the GTK theme (read-only), and ~/Downloads/Equicord-NAME.
+# Not hidden: what any browser shows a site (GPU, screen size, fonts, timezone). Discord could
+# still match profiles on those, and on IP if they share one.
+set -euo pipefail
+
+opt="${PHIOS_OPT:-$HOME/.local/opt}"
+base="${XDG_DATA_HOME:-$HOME/.local/share}/phios-discord"
+profiles="$base/profiles"
+equibop="$opt/equibop"
+installer="$base/EquilotlCli"
+apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+discord_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/discord"
+wallbash_css="${XDG_CACHE_HOME:-$HOME/.cache}/hyde/wallbash/discord.css"
+
+die() { printf 'phios-discord: %s\n' "$*" >&2; exit 1; }
+say() { printf '%s\n' "$*"; }
+valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]] || die "profile names are lowercase letters, digits, - and _ (got '$1')"; }
+gh_latest() { curl -fsSL "https://api.github.com/repos/$1/releases/latest" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1; }
+
+# ---------------------------------------------------------------- install / update
+install_equilotl() {
+    local tag; tag=$(gh_latest Equicord/Equilotl) || die "can't reach GitHub"
+    mkdir -p "$base"
+    curl -fsSL -o "$installer.new" "https://github.com/Equicord/Equilotl/releases/download/$tag/EquilotlCli-linux"
+    chmod +x "$installer.new" && mv "$installer.new" "$installer"
+}
+
+install_discord() {
+    # Discord's Linux build installs and updates itself under ~/.config/discord
+    local tmp; tmp=$(mktemp -d)
+    curl -fsSL -o "$tmp/d.tgz" 'https://discord.com/api/download?platform=linux&format=tar.gz'
+    mkdir -p "$opt" && rm -rf "$opt/Discord" && tar -xzf "$tmp/d.tgz" -C "$opt" && rm -rf "$tmp"
+    mkdir -p "$discord_cfg"
+    ls -d "$discord_cfg"/app-* >/dev/null 2>&1 ||
+        "$opt/Discord/updater_bootstrap" --no-zenity "$discord_cfg" stable https://updates.discord.com/ >/dev/null
+}
+
+install_equibop() {
+    local tag tmp; tag=$(gh_latest Equicord/Equibop) || die "can't reach GitHub"
+    if [[ -f "$equibop/.phios-version" && "$(cat "$equibop/.phios-version")" == "$tag" ]]; then
+        say "Equibop $tag is current"; return 0
+    fi
+    say "Equibop $tag"
+    tmp=$(mktemp -d)
+    curl -fsSL -o "$tmp/e.tgz" "https://github.com/Equicord/Equibop/releases/download/$tag/equibop-${tag#v}.tar.gz"
+    tar -xzf "$tmp/e.tgz" -C "$tmp" && rm "$tmp/e.tgz"
+    rm -rf "$equibop.old"; [[ -d "$equibop" ]] && mv "$equibop" "$equibop.old"
+    mv "$tmp"/equibop-* "$equibop" && rm -rf "$tmp" "$equibop.old"
+    printf '%s\n' "$tag" > "$equibop/.phios-version"
+}
+
+patched() { # is the newest Discord app-* folder carrying Equicord?
+    local app; app=$(ls -d "$discord_cfg"/app-* 2>/dev/null | sort -V | tail -n1)
+    [[ -n "$app" && -f "$app/resources/_app.asar" ]]
+}
+
+patch_discord() {
+    [[ -x "$installer" ]] || install_equilotl
+    "$installer" -install -location "$discord_cfg" >/dev/null
+}
+
+desktop_entries() {
+    mkdir -p "$apps" "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps"
+    [[ -f "$opt/Discord/discord.png" ]] &&
+        cp "$opt/Discord/discord.png" "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps/discord.png"
+    equibop_icon "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps/equibop.png"
+    cat > "$apps/discord.desktop" <<EOF
+[Desktop Entry]
+Name=Discord
+GenericName=Internet Messenger
+Comment=Discord with Equicord
+Exec=phios-discord --url -- %u
+Icon=discord
+Type=Application
+Categories=Network;InstantMessaging;
+MimeType=x-scheme-handler/discord;
+StartupWMClass=discord
+EOF
+}
+
+equibop_icon() { # dest: Equicord's icon lives inside Equibop's app.asar
+    [[ -f "$equibop/resources/app.asar" ]] || return 0
+    python3 -I - "$equibop/resources/app.asar" "$1" <<'PY'
+import json, struct, sys
+src, dest = sys.argv[1:]
+with open(src, "rb") as f:
+    _, _, _, n = struct.unpack("<4I", f.read(16))
+    header = json.loads(f.read(n))
+    base = 8 + struct.unpack("<I", open(src, "rb").read(8)[4:8])[0]
+    node = header
+    for part in ("static", "icon.png"):
+        node = node["files"][part]
+    f.seek(base + int(node["offset"]))
+    open(dest, "wb").write(f.read(node["size"]))
+PY
+}
+
+profile_icon() { # name: Equicord's icon with a coloured badge carrying the profile's initial
+    local icons="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps"
+    mkdir -p "$icons"
+    [[ -f "$icons/equibop.png" ]] || equibop_icon "$icons/equibop.png"
+    local out="$icons/phios-discord-$1.png"
+    if ! command -v magick >/dev/null || [[ ! -f "$icons/equibop.png" ]]; then
+        cp -f "$icons/equibop.png" "$out" 2>/dev/null || true; return 0
+    fi
+    local hue initial
+    hue=$(( $(printf '%s' "$1" | cksum | cut -d' ' -f1) % 360 ))
+    initial=$(printf '%s' "${1:0:1}" | tr '[:lower:]' '[:upper:]')
+    [[ "$1" == phi ]] && initial="φ"
+    magick "$icons/equibop.png" -resize 256x256 \
+        \( -size 256x256 xc:none -fill "hsl($hue,75%,55%)" -stroke '#11111b' -strokewidth 8 \
+           -draw 'circle 188,188 188,128' \) -composite \
+        -font DejaVu-Sans-Bold -pointsize 72 -fill white -stroke none \
+        -gravity center -annotate +60+62 "$initial" "$out"
+}
+
+profile_entry() { # name
+    profile_icon "$1"
+    cat > "$apps/phios-discord-$1.desktop" <<EOF
+[Desktop Entry]
+Name=Equicord · $1
+GenericName=Internet Messenger
+Comment=Sealed Discord profile "$1"
+Exec=phios-discord run $1
+Icon=phios-discord-$1
+Type=Application
+Categories=Network;InstantMessaging;
+Keywords=discord;equicord;equibop;$1;
+StartupWMClass=equibop
+EOF
+}
+
+cmd_install() {
+    install_equilotl
+    install_discord
+    patched || patch_discord
+    install_equibop
+    desktop_entries
+    for p in "$profiles"/*/; do [[ -d "$p" ]] && profile_entry "$(basename "$p")"; done
+    command -v update-desktop-database >/dev/null && update-desktop-database -q "$apps" || true
+    say "Discord + Equicord, and Equibop for profiles, are installed."
+}
+
+cmd_update() {
+    install_equilotl
+    patched || patch_discord
+    install_equibop
+    say "Discord updates itself; Equicord is re-applied when it does."
+}
+
+# ---------------------------------------------------------------- main Discord
+cmd_discord() {
+    [[ -x "$opt/Discord/discord" ]] || cmd_install
+    if ! patched; then
+        # Discord updated itself into a new app-* folder: put Equicord back before starting
+        patch_discord || printf 'phios-discord: could not re-apply Equicord; starting plain Discord\n' >&2
+    fi
+    exec "$opt/Discord/discord" "$@"
+}
+
+# ---------------------------------------------------------------- profiles
+cmd_new() {
+    local name=${1:-}; [[ -n "$name" ]] || die "usage: phios-discord new NAME [--proxy URL]"; valid "$name"; shift
+    local proxy=""
+    while (($#)); do
+        case $1 in --proxy) proxy=${2:-}; shift 2 ;; *) die "unknown option $1" ;; esac
+    done
+    local p="$profiles/$name"
+    [[ -d "$p" ]] && die "profile '$name' already exists"
+    [[ -x "$equibop/equibop" ]] || install_equibop
+    mkdir -p "$p/home/.config/equibop/settings" "$HOME/Downloads/Equicord-$name"
+    chmod 700 "$profiles" "$p"
+    od -An -N16 -tx1 /dev/urandom | tr -d ' \n' > "$p/machine-id"; echo >> "$p/machine-id"
+    [[ -n "$proxy" ]] && printf '%s\n' "$proxy" > "$p/proxy"
+    # follow the desktop theme from the first start (HyDE's discord.sh keeps it updated)
+    [[ -f "$wallbash_css" ]] && cp "$wallbash_css" "$p/home/.config/equibop/settings/quickCss.css"
+    profile_entry "$name"
+    command -v update-desktop-database >/dev/null && update-desktop-database -q "$apps" || true
+    say "Profile '$name' is ready: open \"Equicord · $name\" from the app menu, or run: phios-discord run $name"
+}
+
+cmd_proxy() {
+    local name=${1:-}; valid "$name"; local p="$profiles/$name"; [[ -d "$p" ]] || die "no profile '$name'"
+    case ${2:-} in
+        "") cat "$p/proxy" 2>/dev/null || say "none" ;;
+        off) rm -f "$p/proxy"; say "'$name' now uses your normal connection" ;;
+        *) printf '%s\n' "$2" > "$p/proxy"; say "'$name' now goes through $2 (restart it)" ;;
+    esac
+}
+
+cmd_list() {
+    local p n
+    for p in "$profiles"/*/; do
+        [[ -d "$p" ]] || continue
+        n=$(basename "$p")
+        printf '%-16s %s%s\n' "$n" "$(cat "$p/proxy" 2>/dev/null || echo 'normal connection')" \
+            "$(pgrep -f "phios-discord-profile=$n( |$)" >/dev/null && echo '  (running)' || true)"
+    done
+}
+
+cmd_rm() {
+    local name=${1:-}; valid "$name"; local p="$profiles/$name"; [[ -d "$p" ]] || die "no profile '$name'"
+    pgrep -f "phios-discord-profile=$name( |$)" >/dev/null && die "'$name' is running; close it first"
+    rm -rf "$p" "$apps/phios-discord-$name.desktop"
+    say "Deleted profile '$name' (its downloads in ~/Downloads/Equicord-$name were kept)"
+}
+
+seal_settings() { # profile dir: Rich Presence server off (it would share a socket and ports between profiles)
+    python3 - "$1/home/.config/equibop/settings.json" <<'PY'
+import json, os, sys
+f = sys.argv[1]
+try:
+    d = json.load(open(f))
+except Exception:
+    d = {}
+want = {"arRPC": False, "arRPCDisabled": True, "arRPCProcessScanning": False}
+if any(d.get(k) != v for k, v in want.items()):
+    d.update(want)
+    os.makedirs(os.path.dirname(f), exist_ok=True)
+    json.dump(d, open(f, "w"), indent=4)
+PY
+}
+
+focus_profile() { # bwrap pid: focus the window whose process descends from it
+    command -v hyprctl >/dev/null || return 0
+    local pid q
+    for pid in $(hyprctl clients -j | python3 -c 'import json,sys; print(*[c["pid"] for c in json.load(sys.stdin)])'); do
+        q=$pid
+        while [[ -n "$q" && "$q" -gt 1 ]]; do
+            [[ "$q" == "$1" ]] && { hyprctl dispatch focuswindow "pid:$pid" >/dev/null; return 0; }
+            q=$(awk '/^PPid:/{print $2}' "/proc/$q/status" 2>/dev/null)
+        done
+    done
+}
+
+cmd_run() {
+    local name=${1:-}; valid "$name"; shift
+    local p="$profiles/$name"; [[ -d "$p" ]] || die "no profile '$name' (make it with: phios-discord new $name)"
+    [[ -x "$equibop/equibop" ]] || install_equibop
+    command -v bwrap >/dev/null || die "bubblewrap (bwrap) is missing"
+    local sandbox; sandbox=$(pgrep -f "phios-discord-profile=$name( |$)" | head -n1 || true)
+    if [[ -n "$sandbox" ]]; then
+        # already open: bring its window forward instead of starting a second copy on the same data
+        focus_profile "$sandbox"; exit 0
+    fi
+
+    local run=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+    local args=(
+        --dev-bind / /
+        --proc /proc
+        --tmpfs "$HOME"
+        --bind "$p/home" "$HOME"
+        --ro-bind "$equibop" "$equibop"
+        --bind "$HOME/Downloads/Equicord-$name" "$HOME/Downloads"
+        --tmpfs /tmp
+        --ro-bind-try /tmp/.X11-unix /tmp/.X11-unix
+        --tmpfs "$run"
+        --ro-bind "$run/${WAYLAND_DISPLAY:-wayland-0}" "$run/${WAYLAND_DISPLAY:-wayland-0}"
+        --ro-bind-try "$run/pipewire-0" "$run/pipewire-0"
+        --ro-bind-try "$run/pulse/native" "$run/pulse/native"
+        --ro-bind "$p/run/bus" "$run/bus"
+        --setenv DBUS_SESSION_BUS_ADDRESS "unix:path=$run/bus"
+        --ro-bind "$p/machine-id" /etc/machine-id
+        --ro-bind-try "$p/machine-id" /var/lib/dbus/machine-id
+        --unshare-pid --unshare-ipc --unshare-cgroup-try
+        --die-with-parent
+        --setenv HOME "$HOME"
+        --setenv TMPDIR /tmp
+        --unsetenv XDG_CONFIG_HOME --unsetenv XDG_CACHE_HOME --unsetenv XDG_DATA_HOME --unsetenv XDG_STATE_HOME
+        --setenv CHROME_DESKTOP "phios-discord-$name.desktop"
+    )
+    mkdir -p "$HOME/Downloads/Equicord-$name"
+    # the desktop's look, read-only: fonts, icons, cursors, GTK theme
+    local d
+    for d in .local/share/fonts .fonts .config/fontconfig .icons .local/share/icons .themes .local/share/themes \
+             .config/gtk-3.0 .config/gtk-4.0 .gtkrc-2.0; do
+        [[ -e "$HOME/$d" ]] && args+=(--ro-bind "$HOME/$d" "$HOME/$d")
+    done
+    [[ -d "$run" ]] || die "no XDG_RUNTIME_DIR"
+    seal_settings "$p"
+
+    local flags=(--ozone-platform-hint=auto --enable-features=WaylandWindowDecorations)
+    if [[ -s "$p/proxy" ]]; then
+        local proxy host; proxy=$(head -n1 "$p/proxy")
+        host=$(sed -E 's#^[a-z0-9]+://##; s#:[0-9]+$##' <<<"$proxy")
+        flags+=(
+            "--proxy-server=$proxy"
+            # every name is resolved by the proxy, never locally (only the proxy's own name is)
+            "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE $host"
+            --force-webrtc-ip-handling-policy=disable_non_proxied_udp
+        )
+    fi
+
+    # D-Bus through a filter: notifications, tray, portals (files, screen share, dark mode) and the
+    # keyring only. Your SSH/GPG agents and everything else in the session stay out of reach.
+    command -v xdg-dbus-proxy >/dev/null || die "xdg-dbus-proxy is missing"
+    mkdir -p "$p/run" && chmod 700 "$p/run" && rm -f "$p/run/bus"
+    xdg-dbus-proxy "${DBUS_SESSION_BUS_ADDRESS:-unix:path=$run/bus}" "$p/run/bus" --filter \
+        --talk=org.freedesktop.Notifications \
+        --talk=org.freedesktop.portal.Desktop \
+        --broadcast='org.freedesktop.portal.*=@/org/freedesktop/portal/*' \
+        --talk=org.kde.StatusNotifierWatcher --own='org.kde.*' \
+        --talk=org.freedesktop.secrets &
+    local proxy_pid=$! i
+    for i in $(seq 50); do [[ -S "$p/run/bus" ]] && break; sleep 0.1; done
+    [[ -S "$p/run/bus" ]] || { kill "$proxy_pid" 2>/dev/null; die "D-Bus filter didn't start"; }
+
+    local rc=0
+    (exec -a "phios-discord-profile=$name" bwrap "${args[@]}" -- "$equibop/equibop" "${flags[@]}" "$@") || rc=$?
+    kill "$proxy_pid" 2>/dev/null; rm -f "$p/run/bus"
+    return "$rc"
+}
+
+case ${1:-} in
+    new) shift; cmd_new "$@" ;;
+    run) shift; cmd_run "$@" ;;
+    proxy) shift; cmd_proxy "$@" ;;
+    list|ls) cmd_list ;;
+    rm|delete) shift; cmd_rm "$@" ;;
+    install) cmd_install ;;
+    update) cmd_update ;;
+    -h|--help|help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *) cmd_discord "$@" ;;
+esac

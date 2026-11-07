@@ -226,6 +226,21 @@ Telegram Desktop and AyuGram follow the theme too. Every theme switch rebuilds `
 
 Spotify follows it as well when [spicetify](https://spicetify.app) is installed: the first theme switch sets it up with HyDE's Sleek theme and the theme's colours, later switches refresh them (`phios-spicetify-theme`, which replaces HyDE's hook: that one can't find spicetify or Flatpak Spotify's settings on Debian). A running Spotify shows the new colours when it next starts. For a system-wide Flatpak Spotify, spicetify needs write access to Spotify's folder once (it says how).
 
+### Discord, and separate Discord accounts
+
+`phios-discord install` sets up Discord with [Equicord](https://github.com/Equicord/Equicord), all in your home folder with no root needed. Discord updates itself, and `phios-discord` puts Equicord back after each update. Equicord follows the theme like Discord clients do under HyDE.
+
+For accounts that must never be linked, use sealed profiles: `phios-discord new NAME` adds an "Equicord · NAME" app with its own badge. Each profile runs [Equibop](https://github.com/Equicord/Equibop) inside bubblewrap and gets:
+
+- its own home folder (login, cookies, storage, cache, Equicord settings), so it can't see your real home or the other profiles;
+- its own `/tmp`, runtime folder, process list and machine-id, so it can't see your other apps, your SSH or GPG agent, or other Discord instances;
+- D-Bus through a filter that only allows notifications, the tray, portals and the keyring;
+- Rich Presence turned off, because its socket and ports would be shared between profiles.
+
+`phios-discord proxy NAME socks5://HOST:1080` gives a profile its own exit IP. With Mullvad, every server's SOCKS5 proxy (for example `se-sto-wg-socks5-001.relays.mullvad.net`) can be reached through the one tunnel you're already connected to. A proxied profile resolves every name through the proxy and keeps WebRTC on it, which means voice and video don't connect in that profile.
+
+What profiles can't hide is what any browser shows a site: GPU, screen size, fonts and timezone.
+
 ## The HyDE port
 
 HyDE officially supports Arch only. `phios-hyde`:

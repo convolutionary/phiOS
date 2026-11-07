@@ -60,6 +60,8 @@ APT_MAIN=(
     libnotify-bin fonts-noto-color-emoji fontconfig
     # HyDE sets GTK theme, icons and dark/light through dconf; Arch pulls it in with GTK
     dconf-cli
+    # phios-discord: sealed Equicord profiles
+    bubblewrap xdg-dbus-proxy
     # phiOS Looks (phios-looks): GTK4 + libadwaita from Python
     python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
     # theming
@@ -460,6 +462,26 @@ EOF
     f=$HOME/.config/hypr/userprefs.conf
     if [[ -f "$f" ]] && ! grep -q 'phios-caffeine restore' "$f"; then
         printf '\n# phiOS: caffeine (coffee cup) stays on across logins until you turn it off\nexec-once = phios-caffeine restore\n' >>"$f"
+    fi
+
+    # Discord themes: HyDE's hook knows Vencord/Vesktop/WebCord but not Equicord, Equibop or the
+    # sealed phios-discord profiles (each has its own home, so each needs its own copy)
+    f=$HOME/.config/hyde/wallbash/scripts/discord.sh
+    if [[ -f "$f" ]] && ! grep -q phios-discord "$f"; then
+        local tmp; tmp=$(mktemp)
+        awk '/^#\/\/ main loop/ && !done {
+                print "# phiOS: Equicord (patched Discord), Equibop, and every sealed phios-discord profile"
+                print "client_list+=(\"$HOME/.config/Equicord/settings/quickCss.css\")"
+                print "client_list+=(\"$HOME/.config/equibop/settings/quickCss.css\")"
+                print "for _p in \"${XDG_DATA_HOME:-$HOME/.local/share}\"/phios-discord/profiles/*/home/.config/equibop/settings; do"
+                print "    [[ -d \"$_p\" ]] && client_list+=(\"$_p/quickCss.css\")"
+                print "done"
+                print ""; print ""; done = 1 }
+             { print }' "$f" >"$tmp" && cat "$tmp" >"$f" && rm -f "$tmp"
+    fi
+    f=$HOME/.config/hypr/userprefs.conf
+    if [[ -f "$f" ]] && ! grep -q 'match:class ^(equibop)' "$f"; then
+        printf '\n# phiOS: Equibop (phios-discord profiles) gets the same see-through look as Discord\nwindowrule = opacity 0.80 0.80,match:class ^(equibop)$\n' >>"$f"
     fi
 
     # the Arch logo HyDE uses as an icon (window title in waybar, rofi launcher prompt) -> φ
