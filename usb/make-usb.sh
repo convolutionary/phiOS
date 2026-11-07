@@ -379,7 +379,8 @@ write_usb() {
 # ------------------------------------------------------------------ main
 
 main() {
-    trap 'tput cnorm 2>/dev/null; printf "%s" "$R"' EXIT
+    # || true: with no terminal (CI) tput exits 2, and under set -e that became the script's exit code
+    trap 'tput cnorm 2>/dev/null || true; printf "%s" "$R"' EXIT
     trap 'exit 130' INT
     intro
     need curl; need dd; need cmp; [ -z "$SUDO" ] || need sudo
