@@ -1,0 +1,20 @@
+#!/bin/bash
+# phios-raise <window class> -- <command...>
+# Bring an app's existing window to you instead of launching it again.
+#
+# Tray apps like Mullvad keep running when you close their window. Launching them again
+# only tells the running copy to show itself, and on Wayland that request is ignored if
+# the window is open on another workspace or monitor, so "nothing happens". This focuses
+# the existing window (switching to its workspace), or starts the app if it has none.
+set -u
+class=${1:?usage: phios-raise <window class> -- <command...>}
+shift
+[[ ${1:-} == -- ]] && shift
+(($#)) || { echo "usage: phios-raise <window class> -- <command...>" >&2; exit 2; }
+
+addr=$(hyprctl clients -j 2>/dev/null | jq -r --arg c "$class" \
+    'map(select((.class | ascii_downcase) == ($c | ascii_downcase))) | .[0].address // empty')
+if [[ -n "$addr" ]]; then
+    exec hyprctl -q dispatch focuswindow "address:$addr"
+fi
+exec "$@"

@@ -88,6 +88,10 @@ sw=$(in_root 'cd /tmp && starship prompt 2>&1 >/dev/null')
 ! grep -qP '\x{F08C7}' "$H/.config/starship/starship.toml" && ok "prompt shows φ, not the Arch logo" || fail "prompt shows φ, not the Arch logo"
 [[ -x "$C/usr/bin/dconf" ]] && ok "dconf installed (theme dark/light switching)" || fail "dconf installed"
 grep -q 'phios: default branch' "$H/HyDE/Scripts/themepatcher.sh" && ok "themepatcher patched" || fail "themepatcher patched"
+in_root "env -u XDG_DATA_DIRS zsh -c 'source ~/.config/zsh/conf.d/hyde/env.zsh; print \$XDG_DATA_DIRS'" | grep -q /var/lib/flatpak/exports/share \
+    && ok "Flatpak apps reach the launcher (XDG_DATA_DIRS)" || fail "Flatpak apps reach the launcher (XDG_DATA_DIRS)"
+grep -q 'focus_on_activate = true' "$H/.config/hypr/userprefs.conf" && ok "focus_on_activate on" || fail "focus_on_activate on"
+[[ -x "$C/usr/local/bin/phios-raise" ]] && ok "phios-raise installed" || fail "phios-raise installed"
 [[ "$(getent -s files passwd phi 2>/dev/null || grep '^phi:' "$C/etc/passwd")" == *zsh ]] && ok "login shell zsh" || fail "login shell zsh"
 [[ -f "$H/.local/share/phios/phios-golden.png" ]] && ok "phiOS wallpaper rendered" || fail "phiOS wallpaper rendered"
 # --verify-config doesn't evaluate window rules, so these regressions need their own checks

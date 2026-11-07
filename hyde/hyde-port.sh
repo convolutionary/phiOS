@@ -308,6 +308,41 @@ EOF
     f=$HOME/.config/fastfetch/config.jsonc
     [[ -f "$f" ]] && sed -i 's/"  󰣇 OS"/"  φ OS"/' "$f"
 
+    # Debian's zsh never reads /etc/profile.d, so flatpak.sh never adds Flatpak's export dirs
+    # and HyDE's env.zsh sets XDG_DATA_DIRS without them: Flatpak apps missing from the launcher
+    f=$HOME/.config/zsh/conf.d/hyde/env.zsh
+    if [[ -f "$f" ]] && ! grep -q 'phios: zsh never reads' "$f"; then
+        python3 -I - "$f" <<'EOF'
+import sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+a = 'XDG_DATA_DIRS="${XDG_DATA_DIRS:-$XDG_DATA_HOME:/usr/local/share:/usr/share}"\n'
+b = a + """# phios: zsh never reads /etc/profile.d/flatpak.sh, so Flatpak apps were missing from app menus
+for _d in /var/lib/flatpak/exports/share "$XDG_DATA_HOME/flatpak/exports/share"; do
+  [[ ":$XDG_DATA_DIRS:" == *":$_d:"* ]] || XDG_DATA_DIRS="$_d:$XDG_DATA_DIRS"
+done
+unset _d
+"""
+if s.count(a) == 1:
+    open(p, "w", encoding="utf-8").write(s.replace(a, b))
+EOF
+    fi
+
+    # HyDE leaves misc:focus_on_activate off, so an app asking to be shown (a tray app
+    # reopened from the launcher, a link opening in a browser on another workspace) is ignored
+    f=$HOME/.config/hypr/userprefs.conf
+    if [[ -f "$f" ]] && ! grep -q 'focus_on_activate' "$f"; then
+        printf '\n# phiOS: let apps that ask to be shown actually come to the front\nmisc {\n    focus_on_activate = true\n}\n' >>"$f"
+    fi
+
+    # Mullvad keeps running in the tray after its window closes; relaunching it from the menu
+    # did nothing visible when the window sat on another workspace. Raise it instead
+    if [[ -f /usr/share/applications/mullvad-vpn.desktop ]]; then
+        mkdir -p "$HOME/.local/share/applications"
+        sed 's|^Exec=.*|Exec=phios-raise mullvad-vpn -- "/opt/Mullvad VPN/mullvad-vpn" %U|' \
+            /usr/share/applications/mullvad-vpn.desktop >"$HOME/.local/share/applications/mullvad-vpn.desktop"
+    fi
+
     # Debian enables these as global systemd user units, and HyDE also starts each one from
     # its exec-once list. Leaving both on gives two bars, two idle daemons, two polkit agents
     say "disabling Debian's autostart for waybar, hypridle, hyprpolkitagent, hyprsunset (HyDE starts them)"
