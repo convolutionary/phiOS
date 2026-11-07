@@ -12,7 +12,7 @@ jobs:
       - run: sudo apt-get update -q && sudo apt-get install -y -q shellcheck
       - run: >
           shellcheck -x -S warning -e SC1091
-          install.sh lib/ui.sh lib/chroot-setup.sh hyde/*.sh usb/make-usb.sh
+          install.sh lib/ui.sh lib/chroot-setup.sh hyde/*.sh usb/make-usb.sh live/build-iso.sh live/phios-install live/autostart.sh
           rootfs/usr/local/bin/phifetch rootfs/usr/local/bin/phios-hyde
           rootfs/etc/profile.d/phifetch.sh rootfs/etc/grub.d/45_phios_windows
           rootfs/etc/grub.d/00_early_phios tests/*.sh

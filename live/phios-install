@@ -1,0 +1,48 @@
+#!/bin/bash
+# phiOS live launcher: get online (nmtui for Wi-Fi), then run the installer.
+set -u
+# sudo hands us a non-UTF-8 locale; bash then slices the logo's block characters byte by
+# byte and the console draws them as diamonds
+export LANG=C.UTF-8 LC_ALL=C.UTF-8
+PHI_DIR=/opt/phios
+# shellcheck source=../lib/ui.sh
+source "$PHI_DIR/lib/ui.sh"
+MIRROR=http://deb.debian.org/debian/dists/trixie/Release
+
+online() { curl -fsS -m 6 -o /dev/null "$MIRROR"; }
+# progress markers in the kernel log: dmesg shows how far the stick got
+mark() { echo "phios: $*" >/dev/kmsg 2>/dev/null || true; }
+
+mark "launcher up ($(cat "$PHI_DIR/.version" 2>/dev/null))"
+ui_fit_font
+ui_dims
+if ! online; then
+    # ethernet usually comes up by itself within a few seconds
+    for _ in $(seq 20); do online && break; sleep 1; done
+fi
+while ! online; do
+    clear
+    echo
+    ui_box "phiOS installer" \
+        "${C_TXT}The installer downloads Debian and the NVIDIA driver, so it needs network." \
+        "" \
+        "${C_GOLD}${G_DOT}${C_TXT} plug in an ethernet cable, or" \
+        "${C_GOLD}${G_DOT}${C_TXT} press enter to pick a Wi-Fi network" \
+        "" \
+        "${C_DIM}type 'shell' to drop to a shell instead"
+    echo
+    a=$(ask "enter for Wi-Fi" "")
+    [[ "$a" == shell ]] && exit 0
+    nmtui-connect || true
+done
+
+mark "online"
+mark "installer running"
+"$PHI_DIR/install.sh"
+rc=$?
+mark "installer exited ($rc)"
+if ((rc == 0)); then
+    a=$(ask "reboot now? remove the USB stick first" "Y")
+    [[ "$a" =~ ^[Nn] ]] || systemctl reboot
+fi
+exit $rc

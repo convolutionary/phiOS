@@ -11,6 +11,8 @@
 #   ./install.sh --demo                                 # UI preview, touches nothing
 set -Eeuo pipefail
 umask 022
+# the UI measures and slices UTF-8 text; under a C/POSIX locale bash counts bytes instead
+case "${LC_ALL:-${LANG:-}}" in *UTF-8* | *utf8*) ;; *) export LC_ALL=C.UTF-8 ;; esac
 
 PHI_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source=lib/ui.sh

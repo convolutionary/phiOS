@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # phiOS USB maker for Linux and macOS.
-# Downloads the current Debian 13 live ISO, checks it against Debian's signed checksums,
-# writes it to a USB stick and reads it back to prove the write.
+# Writes the phiOS installer (boot it and the installer starts by itself), checked against the
+# release's checksums, then reads the stick back to prove the write.
 #
 #   bash make-usb.sh                     # interactive
-#   bash make-usb.sh --flavor gnome      # live desktop instead of the console image
-#   bash make-usb.sh --iso debian.iso    # use an ISO you already have
+#   bash make-usb.sh --debian            # plain Debian live ISO instead (signature-checked)
+#   bash make-usb.sh --iso some.iso      # use an ISO you already have
+#   bash make-usb.sh --debian --download-only   # just fetch + verify, print the path (CI)
 #   bash <(curl -fsSL https://raw.githubusercontent.com/convolutionary/phiOS/main/usb/make-usb.sh)
 #
 # Runs as your user and calls sudo only to unmount and write the stick. bash 3.2+ (macOS).
 set -euo pipefail
 
+REL=${PHI_USB_RELEASE:-https://github.com/convolutionary/phiOS/releases/latest/download}
 LIVE=${PHI_USB_LIVE:-https://cdimage.debian.org/debian-cd/current-live/amd64/iso-hybrid}
 # Debian CD signing keys, from https://www.debian.org/CD/verify. testing-only key left out
 KEYS="DF9B9C49EAA9298432589D76DA87E80D6294BE9B 10460DAD76165AD81FBC0CE9988021A964E6EA7D"
@@ -22,10 +24,12 @@ CHUNK=67108864        # 64 MiB per dd call, so the bar moves
 BS=4194304
 PHI_DIGITS="1.6180339887498948482045868343656381177203091798057628621354486227052604628189"
 
-FLAVOR=standard ISO="" DEVICE="" YES=0
+FLAVOR=standard ISO="" DEVICE="" YES=0 SOURCE=phios DOWNLOAD_ONLY=0 BASE="" PATTERN=""
 while [ $# -gt 0 ]; do
     case $1 in
-        --flavor) FLAVOR=$2; shift ;;
+        --debian) SOURCE=debian ;;
+        --download-only) DOWNLOAD_ONLY=1 ;;
+        --flavor) FLAVOR=$2; SOURCE=debian; shift ;;
         --iso) ISO=$2; shift ;;
         --device) DEVICE=$2; shift ;;
         --yes) YES=1 ;;
@@ -175,6 +179,18 @@ fsize() { if [ "$OS" = Darwin ]; then stat -f %z "$1"; else stat -c %s "$1"; fi;
 
 get_sums() {
     mkdir -p "$CACHE"
+    if [ "$SOURCE" = phios ]; then
+        say "fetching the phiOS installer's checksums"
+        if curl -fsSL -o "$CACHE/SHA256SUMS" "$REL/SHA256SUMS" 2>/dev/null &&
+            grep -qE ' phios-installer-[^ ]*\.iso$' "$CACHE/SHA256SUMS"; then
+            BASE=$REL PATTERN='^phios-installer-.*\.iso$'
+            bar_done "checksums from the phiOS release on GitHub"
+            return 0
+        fi
+        warn "no phiOS installer release yet, so this writes Debian's live ISO. You'll start the installer by hand"
+        SOURCE=debian
+    fi
+    BASE=$LIVE PATTERN="^debian-live-[0-9.]+-amd64-${FLAVOR}\\.iso$"
     say "fetching Debian's signed checksums"
     curl -fsSL -o "$CACHE/SHA256SUMS" "$LIVE/SHA256SUMS" || die "can't reach cdimage.debian.org"
     curl -fsSL -o "$CACHE/SHA256SUMS.sign" "$LIVE/SHA256SUMS.sign" || die "can't fetch SHA256SUMS.sign"
@@ -204,18 +220,18 @@ get_sums() {
 
 get_iso() {
     local name want url total cur t0 el rate eta pid
-    name=$(awk '{ print $2 }' "$CACHE/SHA256SUMS" | grep -E "^debian-live-[0-9.]+-amd64-${FLAVOR}\.iso$" | head -n1)
+    name=$(awk '{ print $2 }' "$CACHE/SHA256SUMS" | grep -E "$PATTERN" | head -n1)
     if [ -n "$ISO" ]; then
         [ -f "$ISO" ] || die "$ISO doesn't exist"
         want=$(awk -v n="$(basename "$ISO")" '$2 == n { print $1 }' "$CACHE/SHA256SUMS")
-        [ -n "$want" ] || warn "$(basename "$ISO") isn't in Debian's current checksum list, can't verify it"
+        [ -n "$want" ] || warn "$(basename "$ISO") isn't in the current checksum list, can't verify it"
         SUM_WANT=$want
         return 0
     fi
-    [ -n "$name" ] || die "no '$FLAVOR' live image in $LIVE"
+    [ -n "$name" ] || die "no matching image in $BASE"
     SUM_WANT=$(awk -v n="$name" '$2 == n { print $1 }' "$CACHE/SHA256SUMS")
     ISO=$CACHE/$name
-    url=$LIVE/$name
+    url=$BASE/$name
     if [ -f "$ISO" ] && [ "$(fsize "$ISO")" -gt 0 ]; then
         say "found $name in the cache"
     fi
@@ -248,7 +264,15 @@ check_iso() {
     wait $! || true
     if [ "$(cat "$f")" != "$SUM_WANT" ]; then rm -f "$f" "$ISO"; die "SHA256 mismatch, deleted the download. Run again"; fi
     rm -f "$f"
-    bar_done "SHA256 matches Debian's signed list"
+    if [ "$SOURCE" = phios ]; then
+        bar_done "SHA256 matches the release's checksum list"
+        # GitHub build attestation: proves the ISO came out of this repo's release workflow
+        if command -v gh >/dev/null 2>&1 && gh attestation verify "$ISO" -R convolutionary/phiOS >/dev/null 2>&1; then
+            bar_done "GitHub attestation: built by phiOS's release workflow"
+        fi
+    else
+        bar_done "SHA256 matches Debian's signed list"
+    fi
 }
 
 # ------------------------------------------------------------------ 3. pick the stick
@@ -363,12 +387,21 @@ main() {
     get_sums
     get_iso
     check_iso
+    if [ $DOWNLOAD_ONLY = 1 ]; then echo "$ISO"; return 0; fi
     pick_device
     write_usb
     echo
+    if [ "$SOURCE" = phios ]; then
+        box "stick ready" \
+            "${GOLD}1${R}  boot it in UEFI mode (F8/F11/F12 boot menu)" \
+            "${GOLD}2${R}  ${HI}Install phiOS${R} is the default, the installer starts by itself" \
+            "${GOLD}3${R}  no ethernet? it opens a Wi-Fi picker first"
+        echo
+        return 0
+    fi
     box "stick ready" \
         "${GOLD}1${R}  boot it in UEFI mode (F8/F11/F12 boot menu)" \
-        "${GOLD}2${R}  connect to the network:  ${HI}sudo nmtui${R}" \
+        "${GOLD}2${R}  connect to the network (ethernet)" \
         "${GOLD}3${R}  get phiOS and run it:"
     # outside the box and never wrapped, so they copy-paste as one line
     printf '\n  %s%s%s\n  %s%s%s\n\n' "$HI" "wget -qO- $REPO/archive/main.tar.gz | tar xz" "$R" \

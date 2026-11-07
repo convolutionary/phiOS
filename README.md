@@ -62,7 +62,16 @@ It reports Secure Boot, BitLocker, Fast Startup and the clock setting, and shows
 
 ### 2. USB stick
 
-The USB makers download the current Debian 13 live ISO and check it against Debian's signed `SHA256SUMS`. If `gpg` is installed, they also verify that file's signature against Debian's CD signing key, pinned by fingerprint. Then they write the stick and read every byte back. They only offer USB disks, refuse the system disk, and ask you to type the target before erasing it.
+The USB makers write the **phiOS installer**: Debian's live ISO with phiOS and its tools added. Boot it and the installer starts by itself. They check the download against the release's `SHA256SUMS`, write the stick, then read every byte back. They only offer USB disks, refuse the system disk, and ask you to type the target before erasing it.
+
+The installer ISO is built by this repo's release workflow (`live/build-iso.sh`):
+
+- **Source:** Debian's live ISO, after checking it against Debian's CD signing key.
+- **Boot chain:** Debian's signed shim, GRUB and kernel are left exactly as they are, so Secure Boot works the same.
+- **Additions:** NetworkManager (a Wi-Fi picker), the disk tools the installer needs, and phiOS itself, which autostarts.
+- **Removals:** Debian's own installer, so the image is about 0.6 GB smaller.
+
+To check that an ISO really came out of that workflow, run `gh attestation verify <iso> -R convolutionary/phiOS`. The makers run that check themselves when `gh` is installed.
 
 Windows, in an admin PowerShell:
 
@@ -76,18 +85,24 @@ Linux or macOS:
 bash <(curl -fsSL https://raw.githubusercontent.com/convolutionary/phiOS/main/usb/make-usb.sh)
 ```
 
-The default is Debian's console live image. `-Flavor gnome` (PowerShell) or `--flavor gnome` (shell) writes the desktop one instead.
+`-Debian` (PowerShell) or `--debian` (shell) writes plain Debian live instead, checked against Debian's CD signing key. Then you start the installer by hand, as described below.
 
 ### 3. Run it
 
-Boot the stick in **UEFI** mode, connect to the network (`sudo nmtui` for Wi-Fi), then get phiOS:
+Boot the stick in **UEFI** mode. **Install phiOS** is the default menu entry:
+
+- It gets online by itself on ethernet, and opens a Wi-Fi picker if there's no network.
+- Then the installer starts.
+- **Live shell, no installer** in the boot menu skips all of that.
+
+To run it by hand, from that shell or from a plain Debian live stick:
 
 ```sh
-wget -qO- https://github.com/convolutionary/phiOS/archive/refs/heads/main.tar.gz | tar xz
-cd phiOS-main
-lsblk -o NAME,SIZE,MODEL,PARTTYPENAME                                     # find your Linux partition
-sudo ./install.sh --check --target /dev/nvme1n1p3 --esp /dev/nvme1n1p1     # dry run, prints the plan
-sudo ./install.sh                                                          # the real thing
+sudo phios-install                                                  # on the phiOS stick
+# plain Debian live stick:
+wget -qO- https://github.com/convolutionary/phiOS/archive/main.tar.gz | tar xz
+sudo phiOS-main/install.sh --check --target /dev/nvme1n1p3 --esp /dev/nvme1n1p1   # dry run, prints the plan
+sudo phiOS-main/install.sh
 ```
 
 The installer then:
@@ -233,6 +248,7 @@ sudo bash tests/debian-host.sh test_guard.sh test_ui.sh test_phifetch.sh test_us
 | `test_ui.sh` | the installer UI never overflows at 40 to 240 columns, in xterm and Linux-console palettes |
 | `test_phifetch.sh` | every logo and palette across seeds and widths |
 | `test_usb.sh` | the USB maker against loop devices: checks Debian's real signed checksums, writes and byte-compares the stick, refuses non-USB disks, rejects a tampered `SHA256SUMS`, and never overflows the terminal |
+| `test_iso.sh` | boots the installer ISO as a USB stick with Secure Boot enforced: phiOS boot menu, autologin, online, installer running, all with no typing |
 | `test_install.sh` | a full install into a disk image, NVIDIA included: other partitions untouched, UUIDs, crypttab in the initramfs, the signed NVIDIA module, the GRUB theme |
 | `test_secureboot.sh` | boots that image under OVMF with Secure Boot enforced and Microsoft's keys: shim → GRUB → kernel → LUKS → login, with the theme on screen. A GRUB with one flipped byte must be refused |
 | `test_hyde_port.sh` | runs `phios-hyde` inside the installed image: packages resolve, everything builds, and `Hyprland --verify-config` reports `config ok` |
@@ -257,6 +273,7 @@ rootfs/               files copied into the new system (hardening, branding, phi
 hyde/                 stage 2: the HyDE port (phios-hyde)
 grub/                 boot menu theme
 usb/                  USB stick makers for Windows, Linux and macOS
+live/                 builds the phiOS installer ISO (autostarting installer on Debian live)
 windows/preflight.ps1 Windows-side checks
 tools/                generators for the logo, GRUB art and phifetch figures
 tests/                everything above, on loop images

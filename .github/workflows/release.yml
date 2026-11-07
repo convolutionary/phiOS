@@ -1,0 +1,51 @@
+name: release
+
+# push a tag like v0.2.0 to publish an installer ISO. "Run workflow" builds one without publishing.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  iso:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: tools
+        run: sudo apt-get update -q && sudo apt-get install -y -q squashfs-tools xorriso gnupg
+      - name: Debian live ISO, checked against Debian's CD signing key
+        env:
+          PHI_PLAIN: '1'
+          XDG_CACHE_HOME: ${{ runner.temp }}/cache
+        run: bash usb/make-usb.sh --debian --download-only
+      - name: build the phiOS installer ISO
+        run: |
+          iso=$(ls "$RUNNER_TEMP"/cache/phios-usb/debian-live-*-amd64-standard.iso)
+          ver=${GITHUB_REF_NAME//\//-}
+          mkdir -p dist
+          sudo bash live/build-iso.sh "$iso" "dist/phios-installer-$ver.iso"
+          sudo chown "$USER" dist/*.iso
+          (cd dist && sha256sum *.iso > SHA256SUMS && cat SHA256SUMS)
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*.iso
+      - name: publish
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.iso dist/SHA256SUMS \
+            --title "phiOS $GITHUB_REF_NAME" \
+            --notes "Write it with the USB maker (see README), boot it in UEFI mode, the installer starts by itself. Built from Debian's signature-checked live ISO; verify with \`gh attestation verify <iso> -R ${{ github.repository }}\`."
+      - name: keep the ISO on manual runs
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: phios-installer
+          path: dist/
+          retention-days: 7

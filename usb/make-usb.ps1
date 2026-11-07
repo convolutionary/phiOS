@@ -1,12 +1,12 @@
 <#
 phiOS USB maker for Windows. Run it in an ADMIN PowerShell.
 
-Downloads the current Debian 13 live ISO, checks it against Debian's signed checksums,
-writes it to a USB stick and reads every byte back to prove the write.
+Writes the phiOS installer (boot it and the installer starts by itself), checked against the
+release's checksums, then reads every byte back to prove the write.
 
   .\make-usb.ps1                     # interactive
-  .\make-usb.ps1 -Flavor gnome       # live desktop instead of the console image
-  .\make-usb.ps1 -Iso D:\debian.iso  # use an ISO you already have
+  .\make-usb.ps1 -Debian             # plain Debian live ISO instead (signature-checked)
+  .\make-usb.ps1 -Iso D:\some.iso    # use an ISO you already have
   .\make-usb.ps1 -DryRun             # everything except writing (lists your USB disks)
 
   one-liner:
@@ -21,16 +21,18 @@ param(
     [string]$Iso,
     [int]$Disk = -1,
     [switch]$Yes,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$Debian
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
 # run state lives in one table: as a one-liner this runs as a scriptblock, where $script: points
 # at the caller's scope, not ours
-$St = @{ Iso = $Iso; Disk = $Disk; Want = $null; Target = $null }
+$St = @{ Iso = $Iso; Disk = $Disk; Want = $null; Target = $null; Base = $null; Pattern = $null; Source = $(if ($Debian -or $PSBoundParameters.ContainsKey('Flavor')) { 'debian' } else { 'phios' }) }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
 
+$Rel = if ($env:PHI_USB_RELEASE) { $env:PHI_USB_RELEASE } else { 'https://github.com/convolutionary/phiOS/releases/latest/download' }
 $Live = if ($env:PHI_USB_LIVE) { $env:PHI_USB_LIVE } else { 'https://cdimage.debian.org/debian-cd/current-live/amd64/iso-hybrid' }
 # Debian CD signing keys, from https://www.debian.org/CD/verify (testing-only key left out)
 $Keys = @('DF9B9C49EAA9298432589D76DA87E80D6294BE9B', '10460DAD76165AD81FBC0CE9988021A964E6EA7D')
@@ -170,6 +172,20 @@ public static class PhiDisk {
 
 function Get-Sums {
     New-Item -ItemType Directory -Force $Cache | Out-Null
+    if ($St.Source -eq 'phios') {
+        Say "fetching the phiOS installer's checksums"
+        try {
+            Invoke-WebRequest -UseBasicParsing "$Rel/SHA256SUMS" -OutFile "$Cache\SHA256SUMS"
+            if (Select-String -Quiet -Path "$Cache\SHA256SUMS" -Pattern ' phios-installer-\S*\.iso$') {
+                $St.Base = $Rel; $St.Pattern = '^phios-installer-.*\.iso$'
+                BarDone 'checksums from the phiOS release on GitHub'
+                return
+            }
+        } catch {}
+        Warn "no phiOS installer release yet, so this writes Debian's live ISO. You'll start the installer by hand"
+        $St.Source = 'debian'
+    }
+    $St.Base = $Live; $St.Pattern = "^debian-live-[0-9.]+-amd64-$Flavor\.iso$"
     Say "fetching Debian's signed checksums"
     try {
         Invoke-WebRequest -UseBasicParsing "$Live/SHA256SUMS" -OutFile "$Cache\SHA256SUMS"
@@ -206,17 +222,17 @@ function Get-Sums {
 function Get-Iso {
     $sums = Get-Content "$Cache\SHA256SUMS" | ForEach-Object { $p = $_ -split '\s+', 2; [pscustomobject]@{ Hash = $p[0]; Name = $p[1] } }
     if ($St.Iso) {
-        if (-not (Test-Path $St.Iso)) { Die "$St.Iso doesn't exist" }
+        if (-not (Test-Path $St.Iso)) { Die "$($St.Iso) doesn't exist" }
         $hit = $sums | Where-Object Name -eq (Split-Path $St.Iso -Leaf)
-        if (-not $hit) { Warn "$(Split-Path $St.Iso -Leaf) isn't in Debian's current checksum list, can't verify it"; $St.Want = $null }
+        if (-not $hit) { Warn "$(Split-Path $St.Iso -Leaf) isn't in the current checksum list, can't verify it"; $St.Want = $null }
         else { $St.Want = $hit.Hash }
         return
     }
-    $hit = $sums | Where-Object { $_.Name -match "^debian-live-[0-9.]+-amd64-$Flavor\.iso$" } | Select-Object -First 1
-    if (-not $hit) { Die "no '$Flavor' live image in $Live" }
+    $hit = $sums | Where-Object { $_.Name -match $St.Pattern } | Select-Object -First 1
+    if (-not $hit) { Die "no matching image in $($St.Base)" }
     $St.Want = $hit.Hash
     $St.Iso = Join-Path $Cache $hit.Name
-    $url = "$Live/$($hit.Name)"
+    $url = "$($St.Base)/$($hit.Name)"
 
     Add-Type -AssemblyName System.Net.Http
     $client = New-Object System.Net.Http.HttpClient
@@ -264,7 +280,18 @@ function Test-IsoHash {
     } finally { $fs.Close() }
     $got = -join ($sha.Hash | ForEach-Object { $_.ToString('x2') })
     if ($got -ne $St.Want) { Remove-Item $St.Iso; Die 'SHA256 mismatch, deleted the download. Run again' }
-    BarDone "SHA256 matches Debian's signed list"
+    if ($St.Source -eq 'phios') {
+        BarDone "SHA256 matches the release's checksum list"
+        # GitHub build attestation: proves the ISO came out of this repo's release workflow
+        if (Get-Command gh -ErrorAction SilentlyContinue) {
+            $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+            & gh attestation verify $St.Iso -R convolutionary/phiOS *> $null
+            $ok = $LASTEXITCODE -eq 0; $ErrorActionPreference = $eap
+            if ($ok) { BarDone "GitHub attestation: built by phiOS's release workflow" }
+        }
+    } else {
+        BarDone "SHA256 matches Debian's signed list"
+    }
 }
 
 function Select-Stick {
@@ -347,9 +374,18 @@ Test-IsoHash
 Select-Stick
 Write-Stick
 Write-Host ''
+if ($St.Source -eq 'phios') {
+    Box 'stick ready' @(
+        "${GOLD}1$R  boot it in UEFI mode (F8/F11/F12 boot menu)",
+        "${GOLD}2$R  ${HI}Install phiOS$R is the default, the installer starts by itself",
+        "${GOLD}3$R  no ethernet? it opens a Wi-Fi picker first"
+    )
+    Write-Host ''
+    return
+}
 Box 'stick ready' @(
     "${GOLD}1$R  boot it in UEFI mode (F8/F11/F12 boot menu)",
-    "${GOLD}2$R  connect to the network:  ${HI}sudo nmtui$R",
+    "${GOLD}2$R  connect to the network (ethernet)",
     "${GOLD}3$R  get phiOS and run it:"
 )
 # outside the box and never wrapped, so they copy-paste as one line
