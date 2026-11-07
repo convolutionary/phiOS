@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """phios-telegram-theme: a Telegram Desktop / AyuGram theme made from the current HyDE theme.
 
-  phios-telegram-theme [--apply | --no-apply] [--out FILE]
+  phios-telegram-theme [--notify | --no-notify] [--out FILE]
 
-Builds phiOS.tdesktop-theme from HyDE's colours (~/.cache/hyde/wall.dcol, accent from the
-theme's border colour) with the theme wallpaper, blurred, as the chat background.
+Builds ~/Downloads/phiOS.tdesktop-theme from HyDE's colours (accent from the theme's border
+colour) with the theme wallpaper, blurred, as the chat background. HyDE runs this on every
+theme change (wallbash template ~/.config/hyde/wallbash/always/telegram.dcol).
 
-Telegram has no way to switch themes behind your back: a theme only changes when you open
-its file and press "Keep changes". So after building it, if AyuGram or Telegram is running,
-this opens the file in it (--apply, the default when run from HyDE's theme switch) and the
-preview bar appears: one click. --no-apply only writes the file.
+Telegram can't be switched from outside: a theme only changes when you pick its file in
+Settings > Chat Settings > (menu) > Choose from file, then press "Keep changes". Passing the
+file on Telegram's command line doesn't work either; that opens the "Forward to" dialog.
+So if Telegram is running this only shows a notification saying where the new theme is.
+It's written to Downloads because Flatpak Telegram builds can only read that folder.
 
 The colour-to-element map is walogram's constants.tdesktop-theme (MIT), which expects a
 16-colour terminal-style palette (color0..color15) plus lighter/darker/alpha variants.
@@ -28,7 +30,7 @@ HOME = Path.home()
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", HOME / ".cache"))
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config"))
 STATE = Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state"))
-OUT = HOME / "Downloads/.phios/phiOS.tdesktop-theme"   # Flatpak Telegram builds can read Downloads
+OUT = HOME / "Downloads/phiOS.tdesktop-theme"   # Flatpak Telegram builds can only read Downloads
 CONSTANTS = [
     Path(__file__).resolve().parent.parent / "share/phios-telegram/constants.tdesktop-theme",
     Path("/usr/local/share/phios-telegram/constants.tdesktop-theme"),
@@ -182,38 +184,31 @@ def build(out):
     return theme
 
 
-def running_client():
-    """(command to open a file in it) for a Telegram that's running now"""
-    running = ""
+def telegram_running():
     if shutil.which("flatpak"):
-        running = subprocess.run(["flatpak", "ps", "--columns=application"], capture_output=True, text=True).stdout
-    for app in FLATPAKS:
-        if app in running.split():
-            # --file-forwarding: the sandbox gets this one file through the document portal
-            return lambda f, app=app: ["flatpak", "run", "--file-forwarding", app, "@@", str(f), "@@"]
-    ps = subprocess.run(["ps", "-eo", "args="], capture_output=True, text=True).stdout
-    for name in NATIVE:
-        if re.search(rf"(^|/){re.escape(name)}(\s|$)", ps, re.M) and shutil.which(name):
-            return lambda f, name=name: [name, "--", str(f)]
-    return None
+        apps = subprocess.run(["flatpak", "ps", "--columns=application"], capture_output=True, text=True).stdout.split()
+        if any(a in apps for a in FLATPAKS):
+            return True
+    ps = subprocess.run(["ps", "-eo", "comm="], capture_output=True, text=True).stdout.split()
+    return any(n in ps for n in NATIVE)
 
 
 def main():
     ap = argparse.ArgumentParser(prog="phios-telegram-theme", description=__doc__.split("\n\n")[0])
     g = ap.add_mutually_exclusive_group()
-    g.add_argument("--apply", action="store_true", default=True, help="open it in a running Telegram (default)")
-    g.add_argument("--no-apply", dest="apply", action="store_false")
+    g.add_argument("--notify", action="store_true", default=True,
+                   help="if Telegram is running, say where the new theme is (default)")
+    g.add_argument("--no-notify", dest="notify", action="store_false")
     ap.add_argument("--out", type=Path, default=OUT)
     args = ap.parse_args()
 
     theme = build(args.out)
     print(f"{args.out} ({theme})")
-    if args.apply:
-        cmd = running_client()
-        if cmd:
-            subprocess.Popen(cmd(args.out), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             start_new_session=True)
-            print("opened in Telegram: press 'Keep changes' to use it")
+    if args.notify and telegram_running() and shutil.which("notify-send"):
+        subprocess.run(["notify-send", "-a", "phiOS", "-i", "telegram",
+                        f"Telegram theme for {theme} is ready",
+                        "In Telegram: Settings › Chat Settings › ⋮ › Choose from file › "
+                        f"{args.out.name} in Downloads, then Keep changes."])
 
 
 if __name__ == "__main__":

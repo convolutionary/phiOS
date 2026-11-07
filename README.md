@@ -216,7 +216,7 @@ Known gaps:
 
 Behind it are `phios-wall` (the same thing from the command line) and a HyDE wallpaper backend, `wallpaper.phios.sh`, so HyDE's own theme switch, startup and wallpaper commands keep the per-screen choices too. Screens are recognised by make, model and serial, so moving a cable to another port doesn't lose them.
 
-Telegram Desktop and AyuGram follow the theme: every theme switch rebuilds `~/Downloads/.phios/phiOS.tdesktop-theme` from the theme's colours and wallpaper. If Telegram is running, it opens there; press **Keep changes**, because Telegram never switches themes on its own. The colour map comes from [walogram](https://zff.dev/adoyle/walogram) (MIT).
+Telegram Desktop and AyuGram get a matching theme: every theme switch rebuilds `~/Downloads/phiOS.tdesktop-theme` from the theme's colours and wallpaper, and if Telegram is running a notification says so. Apply it in Telegram with Settings › Chat Settings › ⋮ › Choose from file, then **Keep changes**. Telegram can't be switched from outside: there's no setting for it, and passing the file on its command line opens "Forward to" instead. The colour map comes from [walogram](https://zff.dev/adoyle/walogram) (MIT).
 
 ## The HyDE port
 
