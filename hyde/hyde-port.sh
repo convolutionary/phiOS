@@ -60,6 +60,8 @@ APT_MAIN=(
     libnotify-bin fonts-noto-color-emoji fontconfig
     # HyDE sets GTK theme, icons and dark/light through dconf; Arch pulls it in with GTK
     dconf-cli
+    # phiOS Looks (phios-looks): GTK4 + libadwaita from Python
+    python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
     # theming
     nwg-look qt5ct qt6ct qt-style-kvantum qtwayland5 qt6-wayland xsettingsd
     # apps
@@ -291,20 +293,9 @@ profile {
 EOF
     fi
 
-    # HyDE's starship prompt opens with the Arch logo glyph; phiOS gets a gold φ. Debian's
-    # starship (1.22) has no cpp module, so its [cpp] block warns on every prompt
+    # starship: gold φ instead of the Arch logo; drop modules Debian's older starship lacks
     f=$HOME/.config/starship/starship.toml
-    if [[ -f "$f" ]]; then
-        python3 -I - "$f" <<'EOF'
-import re, sys
-p = sys.argv[1]
-s = open(p, encoding="utf-8").read()
-s = s.replace("\U000F08C7 \\", "[φ](bold fg:#ECBE40) \\", 1)
-s = re.sub(r"^\$cpp\\\n", "", s, flags=re.M)
-s = re.sub(r"\n\[cpp\]\n(?:[^\[\n].*\n)*", "\n", s)
-open(p, "w", encoding="utf-8").write(s)
-EOF
-    fi
+    [[ -f "$f" ]] && python3 -I "$PHI_DIR/hyde/fix-starship.py" "$f"
     f=$HOME/.config/fastfetch/config.jsonc
     [[ -f "$f" ]] && sed -i 's/"  󰣇 OS"/"  φ OS"/' "$f"
 
@@ -333,6 +324,16 @@ EOF
     f=$HOME/.config/hypr/userprefs.conf
     if [[ -f "$f" ]] && ! grep -q 'focus_on_activate' "$f"; then
         printf '\n# phiOS: let apps that ask to be shown actually come to the front\nmisc {\n    focus_on_activate = true\n}\n' >>"$f"
+    fi
+    # ...except Telegram, which asks on every new message and would drag its window (often
+    # parked on the Super+S special workspace) onto the screen
+    if [[ -f "$f" ]] && ! grep -q 'suppress_event activate activatefocus' "$f"; then
+        cat >>"$f" <<'EOF'
+
+# phiOS: Telegram (AyuGram, Kotatogram...) asks to be activated on every new message; with
+# focus_on_activate on, that pulled it (and its special workspace) onto the screen. Ignore it
+windowrule = suppress_event activate activatefocus, match:class ^(com\.ayugram\.desktop|org\.telegram\.desktop|io\.github\.kotatogram|AyuGram|TelegramDesktop|telegram-desktop)$
+EOF
     fi
 
     # Mullvad keeps running in the tray after its window closes; relaunching it from the menu
@@ -411,10 +412,48 @@ glue() {
     # phiOS wallpaper into every installed HyDE theme
     wallpaper
 
+    looks
+
     if [[ "$(getent passwd "$USER" | cut -d: -f7)" != */zsh ]]; then
         say "login shell -> zsh"
         sudo chsh -s "$(command -v zsh)" "$USER"
     fi
+}
+
+# Looks (phios-looks): theme and wallpaper picker; per-screen wallpapers remembered per theme
+# (phios-wall, through the "phios" HyDE wallpaper backend); Telegram follows the theme
+looks() {
+    local f
+    # HyDE reads [wallpaper] backend from config.toml; "phios" = awww + per-screen wallpapers
+    f=$HOME/.config/hyde/config.toml
+    if [[ -f "$f" ]] && ! grep -q '^backend = "phios"' "$f"; then
+        printf '\n[wallpaper]\n# phiOS: per-monitor wallpapers (phios-wall / phios-looks), otherwise the same as awww\nbackend = "phios"\n' >>"$f"
+    fi
+
+    # Super+Shift+T / Super+Shift+W open Looks; Super+Alt+Left/Right cycle the focused screen only
+    f=$HOME/.config/hypr/keybindings.conf
+    if [[ -f "$f" ]]; then
+        sed -i \
+            -e 's|^bindd = $mainMod Alt, Right, .*hyde-shell wallpaper -Gn.*|bindd = $mainMod Alt, Right, $d next wallpaper on this screen , exec, phios-wall next # phios: per-screen|' \
+            -e 's|^bindd = $mainMod Alt, Left, .*hyde-shell wallpaper -Gp.*|bindd = $mainMod Alt, Left, $d previous wallpaper on this screen , exec, phios-wall prev # phios: per-screen|' \
+            -e 's|^bindd = $mainMod Shift, W, .*hyde-shell wallpaper -SG.*|bindd = $mainMod Shift, W, $d pick wallpapers per screen , exec, phios-looks --wallpapers # phios: Looks|' \
+            -e 's|^bindd = $mainMod Shift, T, .*hyde-shell themeselect.*|bindd = $mainMod Shift, T, $d pick a theme , exec, phios-looks --themes # phios: Looks|' \
+            "$f"
+    fi
+    f=$HOME/.config/hypr/userprefs.conf
+    if [[ -f "$f" ]] && ! grep -q 'os\\.phi\\.looks' "$f"; then
+        cat >>"$f" <<'EOF'
+
+# phiOS: theme + wallpaper picker (phios-looks) floats in the middle of the screen
+windowrule = float true, match:class ^(os\.phi\.looks.*)$
+windowrule = size 1180 820, match:class ^(os\.phi\.looks.*)$
+windowrule = center true, match:class ^(os\.phi\.looks.*)$
+EOF
+    fi
+
+    # Telegram / AyuGram theme rebuilt from the HyDE colours on every theme change
+    mkdir -p "$HOME/.config/hyde/wallbash/always"
+    cp "$PHI_DIR/hyde/wallbash/telegram.dcol" "$HOME/.config/hyde/wallbash/always/telegram.dcol"
 }
 
 wallpaper() {

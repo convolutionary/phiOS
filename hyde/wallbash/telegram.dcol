@@ -1,0 +1,12 @@
+${XDG_CACHE_HOME}/hyde/wallbash/telegram.dcol|phios-telegram-theme
+# phiOS: the colours HyDE just applied, for phios-telegram-theme (Telegram / AyuGram theme)
+dcol_mode="<wallbash_mode>"
+dcol_pry1="<wallbash_pry1>"
+dcol_txt1="<wallbash_txt1>"
+dcol_1xa3="<wallbash_1xa3>"
+dcol_1xa6="<wallbash_1xa6>"
+dcol_2xa6="<wallbash_2xa6>"
+dcol_3xa6="<wallbash_3xa6>"
+dcol_4xa6="<wallbash_4xa6>"
+dcol_1xa7="<wallbash_1xa7>"
+dcol_2xa7="<wallbash_2xa7>"

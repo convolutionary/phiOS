@@ -1,0 +1,354 @@
+#!/usr/bin/env python3
+"""phios-wall: a wallpaper per monitor, remembered per HyDE theme.
+
+HyDE has one wallpaper per theme, painted on every screen. phios-wall keeps that one as the
+theme's main wallpaper (it still drives wallbash colours, the lock screen and so on) and lets
+any monitor override it. Overrides are saved per theme, so switching away and back brings
+each screen's wallpaper back. Monitors are keyed by their description (make, model, serial),
+which survives cables moving between ports; their connector name is the fallback.
+
+  phios-wall status [--json]                       what each screen shows
+  phios-wall set FILE [--all | --focused | --monitor NAME]
+  phios-wall next|prev [--all | --focused | --monitor NAME]
+  phios-wall reset [--all | --focused | --monitor NAME]   back to the theme's main wallpaper
+  phios-wall apply [--main FILE] [--flag n|p]      paint every screen (HyDE's backend calls this)
+
+--all goes through HyDE (hyde-shell wallpaper -G -s), exactly like HyDE's own picker, and
+clears this theme's overrides. Without a target, set/next/prev act on the focused monitor.
+"""
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+HOME = Path.home()
+CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config"))
+STATE = Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state"))
+CACHE = Path(os.environ.get("XDG_CACHE_HOME", HOME / ".cache"))
+THEMES = CONFIG / "hyde/themes"
+STATE_FILE = STATE / "phios/wallpapers.json"
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".avif", ".jxl"}
+VIDEO_EXT = {".mp4", ".mkv", ".webm", ".mov", ".avi"}
+
+
+# ---------------------------------------------------------------- HyDE state
+
+def current_theme():
+    try:
+        for line in (STATE / "hyde/staterc").read_text().splitlines():
+            if line.startswith("HYDE_THEME="):
+                return line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return ""
+
+
+def theme_dir(theme):
+    return THEMES / theme
+
+
+def main_wallpaper(theme):
+    link = theme_dir(theme) / "wall.set"
+    if link.exists():
+        return str(link.resolve())
+    walls = theme_wallpapers(theme)
+    return walls[0] if walls else ""
+
+
+def theme_wallpapers(theme):
+    """Images (and videos) in a theme folder, the same places HyDE looks."""
+    d = theme_dir(theme)
+    if not d.is_dir():
+        return []
+    seen, out = set(), []
+    for p in sorted(d.rglob("*"), key=lambda p: str(p).lower()):
+        if p.name.startswith("wall.") or not p.is_file():
+            continue
+        if p.suffix.lower() not in IMAGE_EXT | VIDEO_EXT:
+            continue
+        real = str(p.resolve())
+        if real not in seen:
+            seen.add(real)
+            out.append(real)
+    return out
+
+
+# ---------------------------------------------------------------- monitors
+
+def hyprctl_json(*args):
+    try:
+        out = subprocess.run(["hyprctl", "-j", *args], capture_output=True, text=True, timeout=5).stdout
+        return json.loads(out or "null")
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+
+def monitors():
+    mons = []
+    for m in hyprctl_json("monitors") or []:
+        if m.get("disabled"):
+            continue
+        mons.append({
+            "name": m["name"],
+            "key": (m.get("description") or "").strip() or m["name"],
+            "description": m.get("description", ""),
+            "x": m["x"], "y": m["y"],
+            "width": m["width"], "height": m["height"],
+            "scale": m.get("scale", 1), "transform": m.get("transform", 0),
+            "focused": bool(m.get("focused")),
+        })
+    return mons
+
+
+def find_monitor(mons, name):
+    for m in mons:
+        if name in (m["name"], m["key"]):
+            return m
+    sys.exit(f"phios-wall: no monitor called {name!r} (have: {', '.join(m['name'] for m in mons)})")
+
+
+# ---------------------------------------------------------------- saved overrides
+
+def load_state():
+    try:
+        data = json.loads(STATE_FILE.read_text())
+        if isinstance(data, dict) and isinstance(data.get("themes"), dict):
+            return data
+    except (OSError, ValueError):
+        pass
+    return {"version": 1, "themes": {}}
+
+
+def save_state(data):
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=STATE_FILE.parent, prefix=".wallpapers.")
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+    os.replace(tmp, STATE_FILE)
+
+
+def overrides(data, theme):
+    """this theme's {monitor key: file}, minus files that have since been deleted"""
+    o = data["themes"].get(theme, {})
+    return {k: v for k, v in o.items() if os.path.isfile(v)}
+
+
+def wallpaper_for(m, theme, data, main):
+    return overrides(data, theme).get(m["key"], main)
+
+
+# ---------------------------------------------------------------- painting (awww)
+
+def awww_ready():
+    if subprocess.run(["awww", "query"], capture_output=True).returncode == 0:
+        return True
+    subprocess.Popen(["awww-daemon", "--format", "xrgb"], start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(50):
+        time.sleep(0.1)
+        if subprocess.run(["awww", "query"], capture_output=True).returncode == 0:
+            return True
+    return False
+
+
+def still_frame(path):
+    """awww paints images; for a video wallpaper use its first frame, like HyDE does"""
+    if Path(path).suffix.lower() not in VIDEO_EXT:
+        return path
+    out = CACHE / "phios/video-frames" / (hashlib.sha1(path.encode()).hexdigest() + ".png")
+    if not out.exists() and shutil.which("ffmpeg"):
+        out.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", path, "-vframes", "1", str(out)])
+    return str(out) if out.exists() else path
+
+
+def transition(flag):
+    env = os.environ.get
+    if flag == "n":
+        kind = env("WALLPAPER_AWWW_TRANSITION_NEXT") or "grow"
+    elif flag == "p":
+        kind = env("WALLPAPER_AWWW_TRANSITION_PREV") or "outer"
+    else:
+        kind = env("WALLPAPER_AWWW_TRANSITION_DEFAULT") or "grow"
+    return [
+        "--transition-type", kind,
+        "--transition-duration", env("WALLPAPER_AWWW_TRANSITION_DURATION") or "0.4",
+        "--transition-fps", env("WALLPAPER_AWWW_TRANSITION_FPS") or "60",
+        "--transition-bezier", ".43,1.19,1,.4",
+    ]
+
+
+def cursor_on(m):
+    """cursor position inside monitor m, for the transition's origin; centre if it's elsewhere"""
+    pos = hyprctl_json("cursorpos") or {}
+    x, y = pos.get("x"), pos.get("y")
+    w, h = m["width"] / m["scale"], m["height"] / m["scale"]
+    if m["transform"] % 2:
+        w, h = h, w
+    if x is None or not (m["x"] <= x < m["x"] + w and m["y"] <= y < m["y"] + h):
+        return "center"
+    return f"{int(x - m['x'])},{int(h - (y - m['y']))}"   # awww counts y from the bottom
+
+
+def paint(assignments, flag=""):
+    """assignments: [(monitor, file)]. One awww call per file, so screens sharing a file
+    get it in a single transition."""
+    if not assignments or not awww_ready():
+        return False
+    groups = {}
+    for m, f in assignments:
+        groups.setdefault(f, []).append(m)
+    ok = True
+    for f, ms in groups.items():
+        cmd = ["awww", "img", "-o", ",".join(m["name"] for m in ms), still_frame(f), *transition(flag)]
+        cmd += ["--transition-pos", cursor_on(ms[0]) if len(ms) == 1 else "center"]
+        ok &= subprocess.run(cmd).returncode == 0
+    return ok
+
+
+# ---------------------------------------------------------------- commands
+
+def targets(args, mons):
+    if getattr(args, "all", False):
+        return None   # every screen, through HyDE
+    if getattr(args, "monitor", None):
+        return [find_monitor(mons, args.monitor)]
+    focused = [m for m in mons if m["focused"]] or mons[:1]
+    return focused
+
+
+def cmd_status(args):
+    theme = current_theme()
+    data, main = load_state(), main_wallpaper(theme)
+    o = overrides(data, theme)
+    mons = monitors()
+    for m in mons:
+        m["wallpaper"] = o.get(m["key"], main)
+        m["override"] = m["key"] in o
+    info = {"theme": theme, "main": main, "monitors": mons, "wallpapers": theme_wallpapers(theme)}
+    if args.json:
+        json.dump(info, sys.stdout, indent=2)
+        print()
+        return
+    print(f"theme: {theme}\nmain:  {main}")
+    for m in mons:
+        tag = "own" if m["override"] else "main"
+        print(f"  {m['name']:<10} [{tag}] {m['wallpaper']}")
+
+
+def hyde_global(file):
+    """the theme-wide wallpaper, through HyDE so wallbash/hyprlock/etc. follow it"""
+    hyde = shutil.which("hyde-shell")
+    if hyde:
+        return subprocess.run([hyde, "wallpaper", "-G", "-s", file]).returncode == 0
+    return False
+
+
+def cmd_set(args):
+    file = str(Path(args.file).expanduser().resolve())
+    if not os.path.isfile(file):
+        sys.exit(f"phios-wall: no such file {args.file}")
+    theme, data, mons = current_theme(), load_state(), monitors()
+    tgt = targets(args, mons)
+    if tgt is None:
+        data["themes"].pop(theme, None)
+        save_state(data)
+        if not hyde_global(file):
+            paint([(m, file) for m in mons])
+        return
+    main = main_wallpaper(theme)
+    o = data["themes"].setdefault(theme, {})
+    for m in tgt:
+        if file == main:
+            o.pop(m["key"], None)   # same as the theme's own: no override needed
+        else:
+            o[m["key"]] = file
+    if not o:
+        data["themes"].pop(theme, None)
+    save_state(data)
+    paint([(m, file) for m in tgt], args.flag)
+
+
+def cmd_step(args, step):
+    theme, data, mons = current_theme(), load_state(), monitors()
+    walls = theme_wallpapers(theme)
+    if not walls:
+        sys.exit(f"phios-wall: theme {theme!r} has no wallpapers")
+    main = main_wallpaper(theme)
+    tgt = targets(args, mons)
+    ref = main if tgt is None else wallpaper_for(tgt[0], theme, data, main)
+    i = walls.index(ref) if ref in walls else -1
+    args.file = walls[(i + step) % len(walls)]
+    args.flag = "n" if step > 0 else "p"
+    cmd_set(args)
+
+
+def cmd_reset(args):
+    theme, data, mons = current_theme(), load_state(), monitors()
+    tgt = targets(args, mons)
+    o = data["themes"].get(theme, {})
+    tgt = mons if tgt is None else tgt
+    for m in tgt:
+        o.pop(m["key"], None)
+    if not o:
+        data["themes"].pop(theme, None)
+    save_state(data)
+    main = main_wallpaper(theme)
+    if main:
+        paint([(m, main) for m in tgt])
+
+
+def cmd_apply(args):
+    theme, data = current_theme(), load_state()
+    main = str(Path(args.main).resolve()) if args.main else main_wallpaper(theme)
+    mons = monitors()
+    if not mons:   # no compositor answer (very early at login): paint everything with main
+        if main and awww_ready():
+            subprocess.run(["awww", "img", still_frame(main), *transition(args.flag)])
+        return
+    o = overrides(data, theme)
+    paint([(m, o.get(m["key"], main)) for m in mons if o.get(m["key"], main)], args.flag)
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="phios-wall", description=__doc__.split("\n\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    def target_opts(p):
+        g = p.add_mutually_exclusive_group()
+        g.add_argument("--all", action="store_true", help="every screen (the theme's main wallpaper)")
+        g.add_argument("--focused", action="store_true", help="the focused screen (default)")
+        g.add_argument("--monitor", metavar="NAME", help="connector (DP-1) or description")
+
+    p = sub.add_parser("status")
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("set")
+    p.add_argument("file")
+    p.add_argument("--flag", default="", help=argparse.SUPPRESS)
+    target_opts(p)
+    for name in ("next", "prev"):
+        target_opts(sub.add_parser(name))
+    target_opts(sub.add_parser("reset"))
+    p = sub.add_parser("apply")
+    p.add_argument("--main")
+    p.add_argument("--flag", default="")
+
+    args = ap.parse_args()
+    {
+        "status": cmd_status,
+        "set": cmd_set,
+        "next": lambda a: cmd_step(a, 1),
+        "prev": lambda a: cmd_step(a, -1),
+        "reset": cmd_reset,
+        "apply": cmd_apply,
+    }[args.cmd](args)
+
+
+if __name__ == "__main__":
+    main()

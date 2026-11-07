@@ -92,6 +92,15 @@ in_root "env -u XDG_DATA_DIRS zsh -c 'source ~/.config/zsh/conf.d/hyde/env.zsh; 
     && ok "Flatpak apps reach the launcher (XDG_DATA_DIRS)" || fail "Flatpak apps reach the launcher (XDG_DATA_DIRS)"
 grep -q 'focus_on_activate = true' "$H/.config/hypr/userprefs.conf" && ok "focus_on_activate on" || fail "focus_on_activate on"
 [[ -x "$C/usr/local/bin/phios-raise" ]] && ok "phios-raise installed" || fail "phios-raise installed"
+grep -q 'suppress_event activate activatefocus' "$H/.config/hypr/userprefs.conf" && ok "Telegram can't steal focus" || fail "Telegram can't steal focus"
+grep -q '^backend = "phios"' "$H/.config/hyde/config.toml" && ok "HyDE uses the phios wallpaper backend" || fail "HyDE uses the phios wallpaper backend"
+grep -q 'phios-looks --themes' "$H/.config/hypr/keybindings.conf" && ok "Super+Shift+T opens Looks" || fail "Super+Shift+T opens Looks"
+[[ -f "$H/.config/hyde/wallbash/always/telegram.dcol" ]] && ok "Telegram theme hook installed" || fail "Telegram theme hook installed"
+for b in phios-looks phios-wall wallpaper.phios.sh phios-telegram-theme; do
+    [[ -x "$C/usr/local/bin/$b" ]] && ok "$b installed" || fail "$b installed"
+done
+in_root 'python3 -c "import gi; gi.require_version(\"Gtk\", \"4.0\"); gi.require_version(\"Adw\", \"1\"); from gi.repository import Gtk, Adw"' \
+    && ok "Looks' GTK4 + libadwaita bindings import" || fail "Looks' GTK4 + libadwaita bindings import"
 [[ "$(getent -s files passwd phi 2>/dev/null || grep '^phi:' "$C/etc/passwd")" == *zsh ]] && ok "login shell zsh" || fail "login shell zsh"
 [[ -f "$H/.local/share/phios/phios-golden.png" ]] && ok "phiOS wallpaper rendered" || fail "phiOS wallpaper rendered"
 # --verify-config doesn't evaluate window rules, so these regressions need their own checks

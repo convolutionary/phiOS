@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Looks
+GenericName=Themes and wallpapers
+Comment=Pick a HyDE theme, and a wallpaper for each screen
+Exec=phios-looks
+Icon=preferences-desktop-theme
+Categories=Settings;DesktopSettings;
+Keywords=theme;wallpaper;background;dark;light;colours;colors;
+StartupWMClass=os.phi.looks
+Actions=wallpapers;
+
+[Desktop Action wallpapers]
+Name=Wallpapers
+Exec=phios-looks --wallpapers

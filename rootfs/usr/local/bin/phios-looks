@@ -1,0 +1,649 @@
+#!/usr/bin/env python3
+"""phios-looks: pick a HyDE theme, and a wallpaper for each screen.
+
+  phios-looks [--themes | --wallpapers]
+
+Themes: every installed HyDE theme as a card (its wallpaper, colours, light/dark). Click
+or Enter applies it; start typing to search.
+Wallpapers: your monitors drawn the way they're arranged. Pick a screen (or "All screens"),
+then a wallpaper. Each screen's choice is remembered per theme (see phios-wall).
+"""
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk  # noqa: E402
+
+APP_ID = "os.phi.looks" + (".test" if os.environ.get("PHIOS_LOOKS_TEST") else "")
+HOME = Path.home()
+CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config"))
+STATE = Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state"))
+CACHE = Path(os.environ.get("XDG_CACHE_HOME", HOME / ".cache"))
+THEMES = CONFIG / "hyde/themes"
+THUMBS = CACHE / "phios/thumbs"
+THUMB_W, THUMB_H = 480, 270
+VIDEO_EXT = {".mp4", ".mkv", ".webm", ".mov", ".avi"}
+
+CSS = """
+.looks-thumb { border-radius: 12px; }
+.looks-card { padding: 6px; border-radius: 16px; }
+flowboxchild { border-radius: 18px; padding: 4px; }
+flowboxchild:focus-visible, flowboxchild:hover { background: alpha(currentColor, 0.07); }
+.looks-active .looks-thumb { box-shadow: 0 0 0 3px var(--accent-bg-color, @accent_bg_color); }
+.looks-badge { background: var(--accent-bg-color, @accent_bg_color); color: var(--accent-fg-color, @accent_fg_color);
+               border-radius: 99px; padding: 2px 10px; font-weight: bold; font-size: 0.85em; margin: 8px; }
+.looks-mode { background: alpha(black, 0.55); color: white; border-radius: 99px; padding: 3px; margin: 8px; }
+.looks-swatch { border-radius: 99px; min-width: 14px; min-height: 14px; }
+.looks-monitor { padding: 0; border-radius: 10px; border: 3px solid alpha(currentColor, 0.15); background: none; }
+.looks-monitor.looks-selected { border-color: var(--accent-bg-color, @accent_bg_color); }
+.looks-monitor-label { background: alpha(black, 0.6); color: white; border-radius: 6px; padding: 1px 7px;
+                       margin: 6px; font-size: 0.85em; }
+.looks-own { background: var(--accent-bg-color, @accent_bg_color); color: var(--accent-fg-color, @accent_fg_color); }
+.looks-layout { background: alpha(currentColor, 0.04); border-radius: 16px; padding: 14px; }
+"""
+
+# ---------------------------------------------------------------- data
+
+
+def run(cmd, **kw):
+    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+
+
+def current_theme():
+    try:
+        for line in (STATE / "hyde/staterc").read_text().splitlines():
+            if line.startswith("HYDE_THEME="):
+                return line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return ""
+
+
+def theme_info(d):
+    """name, wallpaper, colours and light/dark of one theme folder"""
+    text = ""
+    try:
+        text = (d / "hypr.theme").read_text(errors="replace")
+    except OSError:
+        pass
+    colours = []
+    for line in text.splitlines():
+        if re.match(r"\s*col\.(active|inactive)_border\s*=", line):
+            for hexa in re.findall(r"rgba?\(([0-9a-fA-F]{6})", line):
+                if hexa.lower() not in colours:
+                    colours.append(hexa.lower())
+    m = re.search(r"^\$COLOR_SCHEME\s*=\s*(\S+)", text, re.M)
+    light = bool(m and "light" in m.group(1))
+    wall = d / "wall.set"
+    wall = str(wall.resolve()) if wall.exists() else ""
+    if not wall:
+        for p in sorted((d / "wallpapers").glob("*")) if (d / "wallpapers").is_dir() else []:
+            if p.is_file():
+                wall = str(p)
+                break
+    return {"name": d.name, "wall": wall, "colours": colours[:4], "light": light}
+
+
+def all_themes():
+    if not THEMES.is_dir():
+        return []
+    ts = [theme_info(d) for d in THEMES.iterdir() if (d / "hypr.theme").is_file()]
+    return sorted(ts, key=lambda t: t["name"].lower())
+
+
+def wall_status():
+    r = run(["phios-wall", "status", "--json"])
+    try:
+        return json.loads(r.stdout)
+    except ValueError:
+        return {"theme": current_theme(), "main": "", "monitors": [], "wallpapers": []}
+
+
+# ---------------------------------------------------------------- thumbnails
+
+_pool = ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 4))
+
+
+def thumb_path(src):
+    try:
+        st = os.stat(src)
+    except OSError:
+        return None
+    key = hashlib.sha1(f"{src}|{st.st_mtime_ns}|{st.st_size}".encode()).hexdigest()
+    return THUMBS / f"{key}.jpg"
+
+
+def make_thumb(src):
+    """16:9 cover-cropped jpeg in ~/.cache/phios/thumbs, made once per file version"""
+    out = thumb_path(src)
+    if out is None:
+        return None
+    if out.exists():
+        return str(out)
+    THUMBS.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(".tmp.jpg")
+    try:
+        if Path(src).suffix.lower() in VIDEO_EXT:
+            run(["ffmpeg", "-loglevel", "error", "-y", "-i", src, "-vframes", "1",
+                 "-vf", f"scale={THUMB_W}:{THUMB_H}:force_original_aspect_ratio=increase,crop={THUMB_W}:{THUMB_H}",
+                 str(tmp)])
+        else:
+            _fmt, w, h = GdkPixbuf.Pixbuf.get_file_info(src)
+            if not w or not h:
+                return None
+            s = max(THUMB_W / w, THUMB_H / h)
+            pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(src, max(1, round(w * s)), max(1, round(h * s)), False)
+            x = (pb.get_width() - THUMB_W) // 2
+            y = (pb.get_height() - THUMB_H) // 2
+            pb = pb.new_subpixbuf(max(0, x), max(0, y), min(THUMB_W, pb.get_width()), min(THUMB_H, pb.get_height()))
+            pb.savev(str(tmp), "jpeg", ["quality"], ["88"])
+        os.replace(tmp, out)
+        return str(out)
+    except (GLib.Error, OSError):
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return None
+
+
+def load_into(picture, src):
+    """fill a Gtk.Picture with src's thumbnail without blocking the UI"""
+    if not src:
+        return
+    cached = thumb_path(src)
+    if cached and cached.exists():
+        picture.set_filename(str(cached))
+        return
+
+    def done(fut):
+        path = fut.result()
+        if path:
+            GLib.idle_add(picture.set_filename, path)
+
+    _pool.submit(make_thumb, src).add_done_callback(done)
+
+
+def scaled_texture(path, w, h):
+    """a texture of exactly w x h (cover crop), so Gtk.Fixed lays it out at that size"""
+    pb = GdkPixbuf.Pixbuf.new_from_file(path)
+    s = max(w / pb.get_width(), h / pb.get_height())
+    sw, sh = max(w, round(pb.get_width() * s)), max(h, round(pb.get_height() * s))
+    pb = pb.scale_simple(sw, sh, GdkPixbuf.InterpType.BILINEAR)
+    return pb.new_subpixbuf((sw - w) // 2, (sh - h) // 2, w, h)
+
+
+def load_exact(picture, src, w, h):
+    if not src:
+        return
+
+    def work():
+        t = make_thumb(src)
+        return scaled_texture(t, w, h) if t else None
+
+    def done(fut):
+        try:
+            pb = fut.result()
+        except GLib.Error:
+            return
+        if pb is not None:
+            GLib.idle_add(lambda: picture.set_paintable(Gdk.Texture.new_for_pixbuf(pb)))
+
+    _pool.submit(work).add_done_callback(done)
+
+
+def thumb_picture(width, height):
+    pic = Gtk.Picture(content_fit=Gtk.ContentFit.COVER, can_shrink=True)
+    pic.set_size_request(width, height)
+    pic.add_css_class("looks-thumb")
+    pic.set_overflow(Gtk.Overflow.HIDDEN)
+    return pic
+
+
+def swatch(hexa):
+    da = Gtk.DrawingArea(content_width=14, content_height=14)
+    r, g, b = (int(hexa[i:i + 2], 16) / 255 for i in (0, 2, 4))
+
+    def draw(_area, cr, w, h):
+        cr.arc(w / 2, h / 2, min(w, h) / 2, 0, 6.2832)
+        cr.set_source_rgb(r, g, b)
+        cr.fill_preserve()
+        cr.set_source_rgba(0, 0, 0, 0.25)
+        cr.set_line_width(1)
+        cr.stroke()
+
+    da.set_draw_func(draw)
+    return da
+
+
+# ---------------------------------------------------------------- themes page
+
+
+class ThemesPage(Gtk.Box):
+    def __init__(self, win):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.win = win
+        self.busy = False
+        self.cards = {}
+        for side in ("top", "bottom", "start", "end"):
+            getattr(self, f"set_margin_{side}")(18)
+
+        top = Gtk.Box(spacing=12)
+        self.search = Gtk.SearchEntry(placeholder_text="Search themes", hexpand=True)
+        self.search.connect("search-changed", lambda *_: self.flow.invalidate_filter())
+        self.search.connect("activate", self.on_search_activate)
+        top.append(self.search)
+        self.count = Gtk.Label(css_classes=["dim-label"])
+        top.append(self.count)
+        self.append(top)
+
+        self.flow = Gtk.FlowBox(
+            selection_mode=Gtk.SelectionMode.NONE, homogeneous=True, valign=Gtk.Align.START,
+            min_children_per_line=4, max_children_per_line=4, row_spacing=8, column_spacing=8,
+            activate_on_single_click=True,
+        )
+        self.flow.set_filter_func(self.filter)
+        self.flow.connect("child-activated", self.on_activate)
+        scroll = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
+        scroll.set_child(self.flow)
+        self.flow.set_vadjustment(scroll.get_vadjustment())   # keyboard focus scrolls the grid
+        self.append(scroll)
+        self.reload()
+
+    def reload(self):
+        self.flow.remove_all()
+        self.cards.clear()
+        active = current_theme()
+        themes = all_themes()
+        for t in themes:
+            child = self.card(t, t["name"] == active)
+            self.flow.append(child)
+            self.cards[t["name"]] = child
+        self.count.set_label(f"{len(themes)} themes")
+        if active in self.cards:
+            # an idle callback that returns True runs again; grab_focus() returns True
+            card = self.cards[active]
+            GLib.idle_add(lambda: card.grab_focus() and False)
+
+    def card(self, t, active):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, css_classes=["looks-card"])
+        over = Gtk.Overlay()
+        pic = thumb_picture(250, 141)
+        load_into(pic, t["wall"])
+        over.set_child(pic)
+        mode = Gtk.Image(icon_name="weather-clear-symbolic" if t["light"] else "weather-clear-night-symbolic",
+                         css_classes=["looks-mode"], halign=Gtk.Align.START, valign=Gtk.Align.START,
+                         tooltip_text="light theme" if t["light"] else "dark theme")
+        over.add_overlay(mode)
+        badge = Gtk.Label(label="Active", css_classes=["looks-badge"], halign=Gtk.Align.END, valign=Gtk.Align.START)
+        badge.set_visible(active)
+        over.add_overlay(badge)
+        spin = Adw.Spinner(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER, width_request=40, height_request=40)
+        spin.set_visible(False)
+        over.add_overlay(spin)
+        box.append(over)
+
+        row = Gtk.Box(spacing=6, margin_start=4, margin_end=4)
+        row.append(Gtk.Label(label=t["name"], xalign=0, hexpand=True, ellipsize=3, css_classes=["heading"]))
+        for c in t["colours"]:
+            row.append(swatch(c))
+        box.append(row)
+
+        child = Gtk.FlowBoxChild(child=box)
+        child.theme = t
+        child.badge = badge
+        child.spin = spin
+        if active:
+            child.add_css_class("looks-active")
+        return child
+
+    def filter(self, child):
+        q = self.search.get_text().strip().lower()
+        return not q or q in child.theme["name"].lower()
+
+    def on_search_activate(self, _entry):
+        # Enter in the search box applies the first match
+        c = self.flow.get_first_child()
+        while c is not None:
+            if c.get_child_visible() and self.filter(c):
+                self.on_activate(self.flow, c)
+                return
+            c = c.get_next_sibling()
+
+    def on_activate(self, _flow, child):
+        if self.busy:
+            return
+        name = child.theme["name"]
+        if name == current_theme():
+            self.win.toast(f"{name} is already active")
+            return
+        self.busy = True
+        child.spin.set_visible(True)
+
+        def work():
+            r = run(["hyde-shell", "theme.switch.sh", "-s", name])
+            GLib.idle_add(self.applied, name, r.returncode == 0)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def applied(self, name, ok):
+        self.busy = False
+        for n, c in self.cards.items():
+            c.spin.set_visible(False)
+            active = ok and n == name
+            if ok:
+                c.badge.set_visible(active)
+                (c.add_css_class if active else c.remove_css_class)("looks-active")
+        self.win.toast(f"{name} applied" if ok else f"Couldn't apply {name}")
+        self.win.theme_changed()
+
+
+# ---------------------------------------------------------------- wallpapers page
+
+
+class WallpapersPage(Gtk.Box):
+    LAYOUT_W, LAYOUT_H = 900, 230
+
+    def __init__(self, win):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        self.win = win
+        self.target = None          # monitor name, or None for all screens
+        self.status = {}
+        for side in ("top", "bottom", "start", "end"):
+            getattr(self, f"set_margin_{side}")(18)
+
+        # screens
+        head = Gtk.Box(spacing=10)
+        self.title = Gtk.Label(xalign=0, hexpand=True, css_classes=["title-3"])
+        head.append(self.title)
+        self.reset_btn = Gtk.Button(label="Use theme wallpaper", tooltip_text="Drop this screen's own wallpaper")
+        self.reset_btn.connect("clicked", self.on_reset)
+        head.append(self.reset_btn)
+        self.all_btn = Gtk.ToggleButton(label="All screens")
+        self.all_btn.connect("toggled", self.on_all_toggled)
+        head.append(self.all_btn)
+        self.append(head)
+
+        self.layout = Gtk.Fixed(halign=Gtk.Align.CENTER)
+        frame = Gtk.Box(css_classes=["looks-layout"], halign=Gtk.Align.FILL)
+        frame.append(Gtk.Box(hexpand=True))
+        frame.append(self.layout)
+        frame.append(Gtk.Box(hexpand=True))
+        self.append(frame)
+
+        self.hint = Gtk.Label(xalign=0, css_classes=["dim-label"], wrap=True)
+        self.append(self.hint)
+
+        # wallpapers of the current theme
+        self.flow = Gtk.FlowBox(
+            selection_mode=Gtk.SelectionMode.NONE, homogeneous=True, valign=Gtk.Align.START,
+            min_children_per_line=5, max_children_per_line=5, row_spacing=8, column_spacing=8,
+            activate_on_single_click=True,
+        )
+        self.flow.connect("child-activated", self.on_pick)
+        scroll = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
+        scroll.set_child(self.flow)
+        self.flow.set_vadjustment(scroll.get_vadjustment())
+        self.append(scroll)
+        self.reload()
+
+    def reload(self, keep_target=True):
+        self.status = wall_status()
+        mons = self.status.get("monitors", [])
+        names = [m["name"] for m in mons]
+        if not keep_target or (self.target not in names and not self.all_btn.get_active()):
+            focused = [m["name"] for m in mons if m.get("focused")]
+            self.target = (focused or names or [None])[0]
+        self.draw_layout()
+        self.fill_walls()
+        self.update_labels()
+
+    # monitors drawn to scale, in their real arrangement
+    def draw_layout(self):
+        child = self.layout.get_first_child()
+        while child is not None:
+            nxt = child.get_next_sibling()
+            self.layout.remove(child)
+            child = nxt
+        mons = self.status.get("monitors", [])
+        if not mons:
+            return
+        rects = []
+        for m in mons:
+            w, h = m["width"] / m["scale"], m["height"] / m["scale"]
+            if m["transform"] % 2:
+                w, h = h, w
+            rects.append((m, m["x"], m["y"], w, h))
+        x0 = min(r[1] for r in rects)
+        y0 = min(r[2] for r in rects)
+        bw = max(r[1] + r[3] for r in rects) - x0
+        bh = max(r[2] + r[4] for r in rects) - y0
+        s = min(self.LAYOUT_W / bw, self.LAYOUT_H / bh)
+        gap = 10   # room for the 3px selection border on both sides
+        self.layout.set_size_request(int(bw * s), int(bh * s))
+        self.mon_buttons = {}
+        for m, x, y, w, h in rects:
+            pw, ph = max(30, int(w * s) - gap), max(30, int(h * s) - gap)
+            # a plain box, not a Gtk.Button: button padding would make tiles bigger than the layout
+            btn = Gtk.Box(css_classes=["looks-monitor"], tooltip_text=f"{m['name']} · {m['description']}",
+                          cursor=Gdk.Cursor.new_from_name("pointer"))
+            over = Gtk.Overlay()
+            pw, ph = pw - 6, ph - 6   # inside the 3px border
+            pic = Gtk.Picture(content_fit=Gtk.ContentFit.FILL, can_shrink=True)
+            pic.set_size_request(pw, ph)
+            pic.add_css_class("looks-thumb")
+            pic.set_overflow(Gtk.Overflow.HIDDEN)
+            load_exact(pic, m.get("wallpaper"), pw, ph)
+            over.set_child(pic)
+            tag = Gtk.Label(label=m["name"], css_classes=["looks-monitor-label"],
+                            halign=Gtk.Align.START, valign=Gtk.Align.END)
+            if m.get("override"):
+                tag.set_label(f"{m['name']} · own")
+                tag.add_css_class("looks-own")
+            over.add_overlay(tag)
+            btn.append(over)
+            click = Gtk.GestureClick()
+            click.connect("released", lambda *_a, n=m["name"]: self.on_monitor(None, n))
+            btn.add_controller(click)
+            self.layout.put(btn, int((x - x0) * s) + gap // 2, int((y - y0) * s) + gap // 2)
+            self.mon_buttons[m["name"]] = btn
+        self.highlight()
+
+    def highlight(self):
+        everything = self.all_btn.get_active()
+        for name, b in getattr(self, "mon_buttons", {}).items():
+            on = everything or name == self.target
+            (b.add_css_class if on else b.remove_css_class)("looks-selected")
+
+    def fill_walls(self):
+        self.flow.remove_all()
+        for f in self.status.get("wallpapers", []):
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, css_classes=["looks-card"])
+            over = Gtk.Overlay()
+            pic = thumb_picture(196, 110)
+            load_into(pic, f)
+            over.set_child(pic)
+            mark = Gtk.Image(icon_name="object-select-symbolic", css_classes=["looks-badge"],
+                             halign=Gtk.Align.END, valign=Gtk.Align.START)
+            over.add_overlay(mark)
+            box.append(over)
+            box.append(Gtk.Label(label=Path(f).stem.replace("_", " ").replace("-", " "),
+                                 ellipsize=3, xalign=0, margin_start=4, css_classes=["caption"]))
+            child = Gtk.FlowBoxChild(child=box)
+            child.file = f
+            child.mark = mark
+            self.flow.append(child)
+        self.mark_current()
+
+    def shown_on_target(self):
+        if self.all_btn.get_active():
+            return self.status.get("main")
+        for m in self.status.get("monitors", []):
+            if m["name"] == self.target:
+                return m.get("wallpaper")
+        return None
+
+    def mark_current(self):
+        cur = self.shown_on_target()
+        c = self.flow.get_first_child()
+        while c is not None:
+            on = getattr(c, "file", None) == cur
+            c.mark.set_visible(on)
+            (c.add_css_class if on else c.remove_css_class)("looks-active")
+            c = c.get_next_sibling()
+
+    def update_labels(self):
+        theme = self.status.get("theme", "")
+        n = len(self.status.get("wallpapers", []))
+        self.title.set_label(f"{theme} · {n} wallpapers" if theme else "Wallpapers")
+        mon = next((m for m in self.status.get("monitors", []) if m["name"] == self.target), None)
+        if self.all_btn.get_active():
+            self.hint.set_label("Pick the theme's wallpaper: every screen without its own gets it, "
+                                "and it sets the theme's colours.")
+            self.reset_btn.set_sensitive(any(m.get("override") for m in self.status.get("monitors", [])))
+            self.reset_btn.set_label("Reset all screens")
+        else:
+            label = mon["name"] if mon else "this screen"
+            self.hint.set_label(f"Pick a wallpaper for {label}. It's remembered for {theme}: switch themes "
+                                "and back and it's still there. Click another screen to change that one.")
+            self.reset_btn.set_sensitive(bool(mon and mon.get("override")))
+            self.reset_btn.set_label("Use theme wallpaper")
+        self.highlight()
+        self.mark_current()
+
+    def on_monitor(self, _btn, name):
+        self.target = name
+        if self.all_btn.get_active():
+            self.all_btn.set_active(False)   # triggers update_labels
+        else:
+            self.update_labels()
+
+    def on_all_toggled(self, _btn):
+        self.update_labels()
+
+    def target_args(self):
+        return ["--all"] if self.all_btn.get_active() else ["--monitor", self.target or ""]
+
+    def run_wall(self, args, msg):
+        def work():
+            r = run(["phios-wall", *args])
+            GLib.idle_add(self.done, r.returncode == 0, msg, r.stderr.strip())
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def done(self, ok, msg, err):
+        self.win.toast(msg if ok else (err or "Couldn't set the wallpaper"))
+        self.reload()
+
+    def on_pick(self, _flow, child):
+        where = "all screens" if self.all_btn.get_active() else self.target
+        self.run_wall(["set", child.file, *self.target_args()], f"Wallpaper set on {where}")
+
+    def on_reset(self, _btn):
+        self.run_wall(["reset", *self.target_args()], "Back to the theme's wallpaper")
+
+
+# ---------------------------------------------------------------- window
+
+
+class Window(Adw.ApplicationWindow):
+    def __init__(self, app):
+        super().__init__(application=app, title="Looks", default_width=1180, default_height=820)
+        self.toasts = Adw.ToastOverlay()
+        self.stack = Adw.ViewStack()
+        self.themes = ThemesPage(self)
+        self.walls = WallpapersPage(self)
+        self.stack.add_titled_with_icon(self.themes, "themes", "Themes", "applications-graphics-symbolic")
+        self.stack.add_titled_with_icon(self.walls, "wallpapers", "Wallpapers", "preferences-desktop-wallpaper-symbolic")
+
+        header = Adw.HeaderBar()
+        header.set_title_widget(Adw.ViewSwitcher(stack=self.stack, policy=Adw.ViewSwitcherPolicy.WIDE))
+        view = Adw.ToolbarView()
+        view.add_top_bar(header)
+        view.set_content(self.stack)
+        self.toasts.set_child(view)
+        self.set_content(self.toasts)
+
+        keys = Gtk.ShortcutController()
+        keys.add_shortcut(Gtk.Shortcut(trigger=Gtk.ShortcutTrigger.parse_string("Escape"),
+                                       action=Gtk.NamedAction.new("window.close")))
+        keys.add_shortcut(Gtk.Shortcut(trigger=Gtk.ShortcutTrigger.parse_string("<Control>Page_Down|<Control>Tab"),
+                                       action=Gtk.CallbackAction.new(lambda *_: self.flip())))
+        self.add_controller(keys)
+        self.themes.search.set_key_capture_widget(self)
+        self.stack.connect("notify::visible-child-name", self.on_page)
+        self.accent = Gtk.CssProvider()
+        Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), self.accent,
+                                                  Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
+        self.apply_accent()
+
+    def flip(self):
+        self.show_page("wallpapers" if self.stack.get_visible_child_name() == "themes" else "themes")
+        return True
+
+    def show_page(self, name):
+        self.stack.set_visible_child_name(name)
+
+    def on_page(self, *_):
+        # typing searches themes only while the themes page is showing
+        self.themes.search.set_key_capture_widget(self if self.stack.get_visible_child_name() == "themes" else None)
+        if self.stack.get_visible_child_name() == "wallpapers":
+            self.walls.reload()
+
+    def toast(self, text):
+        self.toasts.add_toast(Adw.Toast(title=text, timeout=3))
+
+    def apply_accent(self):
+        """accent colour = the active theme's first border colour"""
+        name = current_theme()
+        info = theme_info(THEMES / name) if name else None
+        if info and info["colours"]:
+            c = "#" + info["colours"][0]
+            self.accent.load_from_string(f":root {{ --accent-bg-color: {c}; --accent-color: {c}; }}\n"
+                                         f"@define-color accent_bg_color {c};\n@define-color accent_color {c};\n")
+
+    def theme_changed(self):
+        self.apply_accent()
+        self.walls.reload(keep_target=True)
+
+
+class App(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
+        self.win = None
+
+    def do_startup(self):
+        Adw.Application.do_startup(self)
+        css = Gtk.CssProvider()
+        css.load_from_string(CSS)
+        Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), css,
+                                                  Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    def do_command_line(self, cmdline):
+        args = cmdline.get_arguments()[1:]
+        if any(a in ("-h", "--help") for a in args):
+            cmdline.print_literal(__doc__)
+            return 0
+        if self.win is None:
+            self.win = Window(self)
+        page = "wallpapers" if "--wallpapers" in args else "themes"
+        self.win.show_page(page)
+        if page == "wallpapers":
+            self.win.walls.reload(keep_target=False)   # start on the focused screen
+        self.win.present()
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(App().run(sys.argv))

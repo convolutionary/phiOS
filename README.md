@@ -208,6 +208,16 @@ Known gaps:
 - `/boot` and the initramfs aren't encrypted, and Secure Boot doesn't verify the initramfs.
 - There's no GRUB password, so someone with the machine can edit the kernel command line. They still can't read the disk without the passphrase.
 
+## Looks: themes and wallpapers
+
+**Super+Shift+T** opens Looks on its Themes page: every HyDE theme as a card with its wallpaper, colours and light/dark mode. Click one, or type to search and press Enter.
+
+**Super+Shift+W** opens the Wallpapers page. Your monitors are drawn the way they're arranged; click a screen, then a wallpaper. Each screen keeps its own wallpaper, remembered per theme, so switching themes and back brings every screen's choice back. "All screens" sets the theme's main wallpaper, which drives the colours. **Super+Alt+Left/Right** cycles the screen you're on.
+
+Behind it are `phios-wall` (the same thing from the command line) and a HyDE wallpaper backend, `wallpaper.phios.sh`, so HyDE's own theme switch, startup and wallpaper commands keep the per-screen choices too. Screens are recognised by make, model and serial, so moving a cable to another port doesn't lose them.
+
+Telegram Desktop and AyuGram follow the theme: every theme switch rebuilds `~/Downloads/.phios/phiOS.tdesktop-theme` from the theme's colours and wallpaper. If Telegram is running, it opens there; press **Keep changes**, because Telegram never switches themes on its own. The colour map comes from [walogram](https://zff.dev/adoyle/walogram) (MIT).
+
 ## The HyDE port
 
 HyDE officially supports Arch only. `phios-hyde`:
@@ -239,11 +249,13 @@ HyDE bugs it works around, all found by running it on Debian:
 | `hyprsunset.conf` has one 18:00 / 3000K profile and nothing to undo it | screen stays warm all day | neutral by default; the waybar toggle still works |
 | zsh plugins load through oh-my-zsh, an AUR package | "No plugin system found", no prompt, no Ctrl+arrow word jumps | `plugin.zsh` loads Debian's autosuggestions and syntax highlighting, sets oh-my-zsh's key bindings and Esc Esc for sudo |
 | `user.zsh` has no trailing newline | phiOS's own `alias phi=` landed as `fialias`, a parse error | adds the newline first |
-| the starship prompt uses the Arch logo and a `[cpp]` module | Debian's starship 1.22 has no `cpp`, warns on every prompt | gold φ, `cpp` removed |
+| the starship prompt uses the Arch logo | not phiOS | gold φ |
 | theme switching writes GTK theme and dark/light through `dconf` | not installed on Debian, so dark/light and icons never change | installs `dconf-cli` |
 | `themepatcher.sh` lists branches through the GitHub API and caches clones as `<branch>-<owner>` | the 60 requests/hour limit runs out mid-gallery, and two themes by the same author overwrite each other | asks `git ls-remote` for the default branch, cache dir per repo |
 | Debian's zsh never reads `/etc/profile.d`, and HyDE's `env.zsh` sets `XDG_DATA_DIRS` without Flatpak's dirs | Flatpak apps never show up in the launcher | adds `/var/lib/flatpak/exports/share` and the per-user one |
 | `misc:focus_on_activate` is off | an app asking to be shown is ignored when its window is on another workspace; reopening Mullvad from the menu "does nothing" | turned on; Mullvad's menu entry goes through `phios-raise`, which focuses its window if it has one |
+| Telegram asks to be activated on every new message | with `focus_on_activate` on, notifications pulled its window (and the Super+S workspace) onto the screen | `suppress_event activate activatefocus` for Telegram, AyuGram and Kotatogram |
+| HyDE's starship config uses modules newer than Debian's starship 1.22 (`cpp`, `pixi`) | "Unknown key" warnings in directories where they'd trigger | removes every module `starship module --list` doesn't know |
 
 ## Tests
 
@@ -281,7 +293,7 @@ Not covered, because it needs real hardware: the MOK enrollment screen, your spe
 ```
 install.sh            stage 1, run from the Debian live USB
 lib/                  installer UI and the in-chroot setup
-rootfs/               files copied into the new system (hardening, branding, phifetch)
+rootfs/               files copied into the new system (hardening, branding, phifetch, Looks)
 hyde/                 stage 2: the HyDE port (phios-hyde)
 grub/                 boot menu theme
 usb/                  USB stick makers for Windows, Linux and macOS
