@@ -449,6 +449,22 @@ EOF
     fi
     f=$HOME/.config/hyde/wallbash/always/spotify.dcol
     [[ -f "$f" ]] && sed -i '1s/|.*$/|phios-spicetify-theme/' "$f"
+
+    # caffeine (the coffee cup) that survives waybar restarts: HyDE restarts waybar on every
+    # theme switch, and waybar's built-in idle_inhibitor kept its state in the waybar process
+    mkdir -p "$HOME/.config/waybar/modules"
+    cp "$PHI_DIR/hyde/waybar/custom-caffeine.jsonc" "$HOME/.config/waybar/modules/"
+    # (grep finds nothing on a re-run; under pipefail that must not end the install)
+    { grep -rl '"idle_inhibitor"' "$HOME/.local/share/waybar/layouts" "$HOME/.config/waybar/config.jsonc" 2>/dev/null || true; } \
+        | while IFS= read -r f; do sed -i 's|"idle_inhibitor"|"custom/caffeine"|g' "$f"; done
+    f=$HOME/.config/hypr/userprefs.conf
+    if [[ -f "$f" ]] && ! grep -q 'phios-caffeine restore' "$f"; then
+        printf '\n# phiOS: caffeine (coffee cup) stays on across logins until you turn it off\nexec-once = phios-caffeine restore\n' >>"$f"
+    fi
+
+    # the Arch logo HyDE uses as an icon (window title in waybar, rofi launcher prompt) -> φ
+    python3 -I "$PHI_DIR/hyde/debrand-arch.py" "$HOME/.local/share/waybar" "$HOME/.config/waybar" \
+        "$HOME/.local/share/hyde/rofi" "$HOME/.config/rofi" >/dev/null
 }
 
 wallpaper() {

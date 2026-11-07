@@ -1,0 +1,54 @@
+#!/bin/bash
+# phios-caffeine: keep the screen awake until you say otherwise (the waybar coffee cup).
+#
+#   phios-caffeine on | off | toggle | status [--json] | restore
+#
+# Waybar's built-in idle_inhibitor keeps its on/off state inside the waybar process, and HyDE
+# restarts waybar on every theme switch, so caffeine kept switching itself off. Here the lock is
+# a systemd-inhibit --what=idle held by its own user unit (hypridle honours it:
+# ignore_systemd_inhibit = false), and the on/off choice is saved, so it survives waybar
+# restarts, theme switches and logging in again. "restore" (run at login) re-applies it.
+set -u
+state=${XDG_STATE_HOME:-$HOME/.local/state}/phios/caffeine
+unit=phios-caffeine.service
+signal=9   # waybar "signal" of the custom/caffeine module
+
+is_on() { systemctl --user -q is-active "$unit"; }
+
+refresh_bar() { pkill -RTMIN+$signal -x waybar 2>/dev/null || true; }
+
+start() {
+    mkdir -p "$(dirname "$state")" && echo on >"$state"
+    is_on || systemd-run --user -q --unit="${unit%.service}" --collect \
+        --description="Caffeine: keep the screen awake" \
+        systemd-inhibit --what=idle --who=Caffeine --why="Caffeine mode (coffee cup in the bar)" \
+        --mode=block sleep infinity
+    refresh_bar
+}
+
+stop() {
+    mkdir -p "$(dirname "$state")" && echo off >"$state"
+    systemctl --user stop "$unit" 2>/dev/null || true
+    refresh_bar
+}
+
+status() {
+    if [[ "${1:-}" == --json ]]; then
+        if is_on; then
+            printf '{"alt":"activated","class":"activated","tooltip":"<span foreground=\\"#98c379\\">Caffeine on</span>\\nThe screen stays awake until you turn this off. Click to turn off."}\n'
+        else
+            printf '{"alt":"deactivated","class":"deactivated","tooltip":"<span foreground=\\"#e06c75\\">Caffeine off</span>\\nThe screen dims, locks and sleeps as usual. Click to keep it awake."}\n'
+        fi
+    else
+        is_on && echo on || echo off
+    fi
+}
+
+case "${1:-status}" in
+    on) start ;;
+    off) stop ;;
+    toggle) if is_on; then stop; else start; fi ;;
+    status) status "${2:-}" ;;
+    restore) [[ "$(cat "$state" 2>/dev/null)" == on ]] && start; exit 0 ;;
+    *) echo "usage: phios-caffeine on|off|toggle|status [--json]|restore" >&2; exit 2 ;;
+esac

@@ -1,0 +1,19 @@
+{
+  // phiOS: caffeine (keep awake) that survives waybar restarts and theme switches.
+  // Replaces waybar's built-in idle_inhibitor, whose state lived in the waybar process.
+  "custom/caffeine": {
+    "exec": "phios-caffeine status --json",
+    "return-type": "json",
+    "format": "{icon}",
+    "format-icons": {
+      "activated": "󰅶",
+      "deactivated": "󰛊"
+    },
+    "interval": "once",
+    "signal": 9,
+    "on-click": "phios-caffeine toggle",
+    "rotate": 0,
+    "justify": "center",
+    "tooltip": true
+  }
+}

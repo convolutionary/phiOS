@@ -102,6 +102,58 @@ def theme_accents(theme):
     return found
 
 
+def contrast(a, b):
+    """WCAG contrast ratio of two colours"""
+    def lin(v):
+        v /= 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    la = 0.2126 * lin(a[0]) + 0.7152 * lin(a[1]) + 0.0722 * lin(a[2])
+    lb = 0.2126 * lin(b[0]) + 0.7152 * lin(b[1]) + 0.0722 * lin(b[2])
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def readable(c, bg, fg, ratio=4.5):
+    """c, moved toward the text colour until it reads on bg"""
+    t = 0.0
+    while contrast(c, bg) < ratio and t < 1:
+        t += 0.05
+        c2 = mix(c, fg, t)
+        if contrast(c2, bg) >= ratio:
+            return c2
+    return c if contrast(c, bg) >= ratio else fg
+
+
+def overrides(c, light):
+    """phiOS fixes on top of walogram's map, which was made for wal palettes: incoming bubbles
+    were the text colour darkened 70% (a mid grey that coloured names and reply headers vanish
+    on), sender names used the darkest accent, and Saved Messages kept Telegram's own teal."""
+    bg, fg, acc = c[0], c[7], c[2]
+    msg_in = mix(bg, fg, 0.09)
+    msg_out = mix(bg, acc, 0.30)
+    o = {
+        "msgInBg": msg_in,
+        "msgInBgSelected": mix(msg_in, acc, 0.35),
+        "msgOutBg": msg_out,
+        "msgOutBgSelected": mix(msg_out, acc, 0.35),
+        "msgInDateFg": readable(mix(fg, bg, 0.45), msg_in, fg, 3.0),
+        "msgOutDateFg": readable(mix(fg, msg_out, 0.45), msg_out, fg, 3.0),
+        "msgInServiceFg": readable(c[10], msg_in, fg),
+        "msgOutServiceFg": readable(c[10], msg_out, fg),
+        "msgInReplyBarColor": readable(c[10], msg_in, fg, 3.0),
+        "msgOutReplyBarColor": readable(c[10], msg_out, fg, 3.0),
+        "historyPeerSavedMessagesBg": acc,
+        "historyPeerArchiveUserpicBg": mix(acc, bg, 0.35),
+    }
+    # sender names: the theme's colours, each made readable on an incoming bubble
+    names = [c[2], c[3], c[4], c[5], c[6], c[9], c[11], c[12]]
+    for i, col in enumerate(names, 1):
+        o[f"historyPeer{i}NameFg"] = readable(col, msg_in, fg)
+        o[f"historyPeer{i}NameFgSelected"] = readable(col, o["msgInBgSelected"], fg)
+        o[f"historyPeer{i}UserpicBg"] = col
+    return o
+
+
 def palette():
     d = read_dcol()
     theme = current_theme()
@@ -171,7 +223,12 @@ def build(out):
     if const is None:
         sys.exit("phios-telegram-theme: constants.tdesktop-theme not found")
     c, light, theme = palette()
-    colours = f"// phiOS: generated from HyDE theme {theme}\n\n" + variants(c, light) + const.read_text()
+    o = overrides(c, light)
+    # drop walogram's line for every key phiOS overrides, then add ours
+    kept = [l for l in const.read_text().splitlines()
+            if not (m := re.match(r"\s*(\w+)\s*:", l)) or m.group(1) not in o]
+    colours = (f"// phiOS: generated from HyDE theme {theme}\n\n" + variants(c, light) + "\n".join(kept)
+               + "\n\n// phiOS overrides\n" + "".join(f"{k}: {hexc(v)};\n" for k, v in o.items()))
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
         bgfile = Path(tmp) / "background.jpg"

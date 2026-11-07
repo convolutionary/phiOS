@@ -257,7 +257,8 @@ HyDE bugs it works around, all found by running it on Debian:
 | `hyprsunset.conf` has one 18:00 / 3000K profile and nothing to undo it | screen stays warm all day | neutral by default; the waybar toggle still works |
 | zsh plugins load through oh-my-zsh, an AUR package | "No plugin system found", no prompt, no Ctrl+arrow word jumps | `plugin.zsh` loads Debian's autosuggestions and syntax highlighting, sets oh-my-zsh's key bindings and Esc Esc for sudo |
 | `user.zsh` has no trailing newline | phiOS's own `alias phi=` landed as `fialias`, a parse error | adds the newline first |
-| the starship prompt uses the Arch logo | not phiOS | gold φ |
+| the Arch logo as an icon: starship prompt, waybar window title, rofi launcher prompt | not phiOS | φ (`debrand-arch.py`, `fix-starship.py`) |
+| waybar's caffeine (idle inhibitor) keeps its state in the waybar process, and HyDE restarts waybar on every theme switch | the coffee cup keeps turning itself off | `phios-caffeine`: a `systemd-inhibit --what=idle` lock in its own user unit, remembered across logins; the cup is a `custom/caffeine` module |
 | theme switching writes GTK theme and dark/light through `dconf` | not installed on Debian, so dark/light and icons never change | installs `dconf-cli` |
 | `themepatcher.sh` lists branches through the GitHub API and caches clones as `<branch>-<owner>` | the 60 requests/hour limit runs out mid-gallery, and two themes by the same author overwrite each other | asks `git ls-remote` for the default branch, cache dir per repo |
 | Debian's zsh never reads `/etc/profile.d`, and HyDE's `env.zsh` sets `XDG_DATA_DIRS` without Flatpak's dirs | Flatpak apps never show up in the launcher | adds `/var/lib/flatpak/exports/share` and the per-user one |

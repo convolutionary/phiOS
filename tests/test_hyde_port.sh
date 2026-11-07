@@ -96,7 +96,12 @@ grep -q 'phios-looks --themes' "$H/.config/hypr/keybindings.conf" && ok "Super+S
 [[ -f "$H/.config/hyde/wallbash/always/telegram.dcol" ]] && ok "Telegram theme hook installed" || fail "Telegram theme hook installed"
 head -1 "$H/.config/hyde/wallbash/always/spotify.dcol" 2>/dev/null | grep -q '|phios-spicetify-theme$' && [[ -f "$H/.config/spicetify/Themes/Sleek/user.css" ]] \
     && ok "Spotify (spicetify) theme hook installed" || fail "Spotify (spicetify) theme hook installed"
-for b in phios-looks phios-wall wallpaper.phios.sh phios-telegram-theme phios-spicetify-theme; do
+! grep -rq '"idle_inhibitor"' "$H/.config/waybar/config.jsonc" && [[ -f "$H/.config/waybar/modules/custom-caffeine.jsonc" ]] \
+    && ok "caffeine survives waybar restarts (custom/caffeine)" || fail "caffeine survives waybar restarts (custom/caffeine)"
+! grep -rqiF '\uf303' "$H/.local/share/waybar/modules" "$H/.local/share/hyde/rofi" 2>/dev/null \
+    && ! grep -rqP '\x{F303}' "$H/.local/share/waybar/modules" "$H/.local/share/hyde/rofi" 2>/dev/null \
+    && ok "no Arch logo in the bar or launcher" || fail "no Arch logo in the bar or launcher"
+for b in phios-looks phios-wall wallpaper.phios.sh phios-telegram-theme phios-spicetify-theme phios-caffeine; do
     [[ -x "$C/usr/local/bin/$b" ]] && ok "$b installed" || fail "$b installed"
 done
 in_root 'python3 -c "import gi; gi.require_version(\"Gtk\", \"4.0\"); gi.require_version(\"Adw\", \"1\"); from gi.repository import Gtk, Adw"' \
