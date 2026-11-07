@@ -148,6 +148,14 @@ fi
 if ((${#UI_LOGO[@]} == 0)); then
     UI_LOGO=("φ")
 fi
+# the bare console's Terminus fonts have █ but not the half blocks ▄ ▀ (they draw as ♦)
+if ((UI_VT)); then
+    for _i in "${!UI_LOGO[@]}"; do
+        _l=${UI_LOGO[_i]//▄/█}
+        UI_LOGO[_i]=${_l//▀/█}
+    done
+    unset _i _l
+fi
 # pad every row to the same width so centering and the shimmer line up
 _lw=0
 for _l in "${UI_LOGO[@]}"; do ((${#_l} > _lw)) && _lw=${#_l}; done
