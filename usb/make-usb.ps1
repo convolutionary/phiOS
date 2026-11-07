@@ -70,9 +70,24 @@ function Dims {
 }
 Dims
 
-function Say($t) { Write-Host "$PhiPad$GOLD$PHI$R $TXT$t$R" }
-function Warn($t) { Write-Host "$PhiPad$AMBER!$R $TXT$t$R" }
-function Die($t) { Write-Host ""; Write-Host "$PhiPad$RED$CROSS $t$R"; try { [Console]::CursorVisible = $true } catch {}; exit 1 }
+# prose wraps at the page width with a hanging indent instead of running off the edge
+function Wrap([string]$glyph, [string]$color, [string]$text) {
+    $max = [Math]::Max(10, $PhiW - 2)
+    $lines = New-Object System.Collections.Generic.List[string]; $cur = ''
+    foreach ($w in ($text -split ' ')) {
+        if ($cur.Length -eq 0) { $cur = $w }
+        elseif (($cur.Length + 1 + $w.Length) -le $max) { $cur += " $w" }
+        else { $lines.Add($cur); $cur = $w }
+    }
+    if ($cur.Length) { $lines.Add($cur) }
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($i -eq 0) { Write-Host "$PhiPad$color$glyph$R $TXT$($lines[$i])$R" }
+        else { Write-Host "$PhiPad  $TXT$($lines[$i])$R" }
+    }
+}
+function Say($t) { Wrap $PHI $GOLD $t }
+function Warn($t) { Wrap '!' $AMBER $t }
+function Die($t) { Write-Host ""; Wrap $CROSS $RED $t; try { [Console]::CursorVisible = $true } catch {}; exit 1 }
 function Ask($q) { Write-Host -NoNewline "$PhiPad$GOLD$ARROW$R $TXT$q$R "; Read-Host }
 function Human([double]$b) {
     $u = 'B', 'KiB', 'MiB', 'GiB', 'TiB'; $i = 0
@@ -140,7 +155,7 @@ function Bar([double]$done, [double]$total, [string]$label, [string]$extra = '')
     $empty = [Math]::Max(0, $bw - $f - $head.Length)
     Write-Host -NoNewline ("`r$E[K$PhiPad$HI$label$R $GOLD" + ($FULL * $f) + "$head$DIM" + ($H * $empty) + "$TXT " + $pct.PadLeft(6) + "$GOLD$dg$R  $DIM$extra$R")
 }
-function BarDone($t) { Write-Host ("`r" + $(if ($Fancy) { "$E[K" } else { '' }) + "$PhiPad$OK$CHECK$R $TXT$t$R") }
+function BarDone($t) { Write-Host -NoNewline ("`r" + $(if ($Fancy) { "$E[K" } else { '' })); Wrap $CHECK $OK $t }
 
 function Box([string]$title, [string[]]$lines) {
     Write-Host ("$PhiPad$DIM$TL$H $GOLD$title $DIM" + ($H * [Math]::Max(0, $PhiW - 5 - $title.Length)) + "$TR$R")
