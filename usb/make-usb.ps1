@@ -296,10 +296,12 @@ function Write-Stick {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     try { [Console]::CursorVisible = $false } catch {}
     try {
+        # $len, never $r: PowerShell names are case-insensitive, so $r IS $R (the colour reset)
+        # and the bar printed the chunk size wherever it meant to reset colour
         $iso.Position = 1MB; $dev.Position = 1MB; $done = 1MB
-        while (($r = $iso.Read($buf, 0, $buf.Length)) -gt 0) {
-            if ($r % 512) { [Array]::Clear($buf, $r, 512 - $r % 512); $r += 512 - $r % 512 }
-            $dev.Write($buf, 0, $r); $done += $r
+        while (($len = $iso.Read($buf, 0, $buf.Length)) -gt 0) {
+            if ($len % 512) { [Array]::Clear($buf, $len, 512 - $len % 512); $len += 512 - $len % 512 }
+            $dev.Write($buf, 0, $len); $done += $len
             $rate = $done / [Math]::Max(1, $sw.Elapsed.TotalSeconds)
             Bar ([Math]::Min($done, $size)) $size 'write   ' ("{0}/s {1}" -f (Human $rate), (Mmss (($size - $done) / [Math]::Max(1, $rate))))
         }
@@ -310,18 +312,26 @@ function Write-Stick {
     } finally { $dev.Close(); $iso.Close(); try { [Console]::CursorVisible = $true } catch {} }
     BarDone ("wrote {0} in {1}" -f (Human $size), (Mmss $sw.Elapsed.TotalSeconds))
 
-    # read every byte back from the device
+    # read every byte back from the device and hash both sides with .NET's native SHA256.
+    # (a per-byte PowerShell loop would be ~2 billion interpreted iterations for one ISO)
     $iso = [IO.File]::OpenRead($St.Iso); $dev = [PhiDisk]::Open($n, $false)
+    $ha = [Security.Cryptography.SHA256]::Create(); $hb = [Security.Cryptography.SHA256]::Create()
     $a = New-Object byte[] $Chunk; $b = New-Object byte[] $Chunk; $done = 0
     try {
-        while (($r = $iso.Read($a, 0, $a.Length)) -gt 0) {
-            $want = $r; if ($want % 512) { $want += 512 - $want % 512 }
+        while (($len = $iso.Read($a, 0, $a.Length)) -gt 0) {
+            $want = $len; if ($want % 512) { $want += 512 - $want % 512 }
             $got = 0; while ($got -lt $want) { $k = $dev.Read($b, $got, $want - $got); if ($k -le 0) { break }; $got += $k }
-            for ($i = 0; $i -lt $r; $i++) { if ($a[$i] -ne $b[$i]) { Die ("read-back mismatch at {0}. The stick may be failing" -f (Human ($done + $i))) } }
-            $done += $r
+            if ($got -lt $len) { Die ("the stick ended early at {0}" -f (Human ($done + $got))) }
+            [void]$ha.TransformBlock($a, 0, $len, $null, 0)
+            [void]$hb.TransformBlock($b, 0, $len, $null, 0)
+            $done += $len
             Bar $done $size 'verify  '
         }
+        [void]$ha.TransformFinalBlock($a, 0, 0); [void]$hb.TransformFinalBlock($b, 0, 0)
     } finally { $dev.Close(); $iso.Close() }
+    if ([Convert]::ToBase64String($ha.Hash) -ne [Convert]::ToBase64String($hb.Hash)) {
+        Die 'read-back mismatch: the stick does not match the ISO. It may be failing'
+    }
     BarDone 'read back every byte, the stick matches the ISO'
     Update-Disk -Number $n -ErrorAction SilentlyContinue
 }
