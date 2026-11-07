@@ -208,6 +208,12 @@ Known gaps:
 - `/boot` and the initramfs aren't encrypted, and Secure Boot doesn't verify the initramfs.
 - There's no GRUB password, so someone with the machine can edit the kernel command line. They still can't read the disk without the passphrase.
 
+## Networking
+
+Fast single connections, also through a VPN: BBR congestion control with the `fq` qdisc and 32 MiB TCP buffers (`/etc/sysctl.d/60-phios-network.conf`). Debian's default, CUBIC, halves its rate at every lost packet, and a WireGuard tunnel always loses a few.
+
+Aquantia/Marvell AQtion cards (the `atlantic` driver: AQC107/AQC113, e.g. ASUS XG-C100C) get LRO turned off and all receive traffic on one queue (`/etc/udev/rules.d/62-phios-atlantic.rules`). Stock, an AQC113 through Mullvad managed 10-190 Mbit/s per connection on Linux while the same card did 2 Gbit/s on Windows; with both fixes it does ~850 Mbit/s per connection and ~1.75 Gbit/s over eight.
+
 ## Looks: themes and wallpapers
 
 **Super+Shift+T** opens Looks on its Themes page: every HyDE theme as a card with its wallpaper, colours and light/dark mode. Click one, or type to search and press Enter.

@@ -1,0 +1,9 @@
+# phiOS: Aquantia/Marvell AQtion NICs (atlantic driver: AQC107/AQC113, e.g. ASUS XG-C100C V3).
+# Measured through Mullvad (WireGuard) on a 5 Gbit line, same card did 2 Gbit/s on Windows:
+#   stock                       one TCP stream 10-190 Mbit/s, kernel: "suspect GRO implementation"
+#   LRO off + one RX queue      one stream ~850 Mbit/s, eight streams ~1.75 Gbit/s
+# - LRO is on by default; its merged packets break TCP's GRO assumptions. Software GRO stays on.
+# - RSS spread the single WireGuard UDP flow over several RX queues, so one tunnel's packets
+#   were handled on several cores at once. Steer everything to queue 0 (indirection table);
+#   one core handles several Gbit/s.
+ACTION=="add", SUBSYSTEM=="net", DRIVERS=="atlantic", RUN+="/usr/sbin/ethtool -K $name lro off", RUN+="/usr/sbin/ethtool -X $name equal 1"

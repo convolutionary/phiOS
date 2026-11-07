@@ -41,7 +41,7 @@ BASE=(
     amd64-microcode
     grub-efi-amd64 grub-efi-amd64-signed shim-signed efibootmgr mokutil
     cryptsetup cryptsetup-initramfs
-    sudo network-manager console-setup keyboard-configuration
+    sudo network-manager ethtool console-setup keyboard-configuration
     apparmor apparmor-utils apparmor-profiles apparmor-profiles-extra
     nftables unattended-upgrades apt-listchanges needrestart
     systemd-zram-generator libpam-tmpdir lynis debsums
