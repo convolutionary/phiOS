@@ -26,6 +26,7 @@ phiOS installs a hardened, LUKS2-encrypted Debian 13 next to an existing Windows
 - **Kernel and system hardening.** See [Hardening](#hardening).
 - **Hyprland + HyDE** via `phios-hyde`, run after the first boot.
 - **A themed GRUB** and **phifetch**, both described below.
+- **Two apps of our own**: [Tether](#tether-and-margin) for remote sessions and [Margin](#tether-and-margin), a text editor for files of any size.
 
 ## It won't touch Windows
 
@@ -241,12 +242,21 @@ For accounts that must never be linked, use sealed profiles: `phios-discord new 
 
 What profiles can't hide is what any browser shows a site: GPU, screen size, fonts and timezone.
 
+### Tether and Margin
+
+`phios-hyde` builds and installs two phiOS apps:
+
+- **Tether**: SSH, SFTP, RDP, VNC, serial, telnet, mosh and local terminals in one window, with a file panel that follows your shell, split panes, tunnels that stay up and sessions imported from MobaXterm, PuTTY or `~/.ssh/config`. Its terminal colours follow the HyDE theme.
+- **Margin**: a text editor that opens a 300 GB file as quickly as a small one. It has tabs, find and replace with regex, find in files, syntax highlighting for about 200 languages, a log highlighter, follow-the-file (`tail -f`), and it brings back unsaved work after closing. `SUPER+C` opens it, and it's the default app for text files.
+
+Both are built from source. While their repositories are private, an install without access to them skips both apps and lists them under "didn't build".
+
 ## The HyDE port
 
 HyDE officially supports Arch only. `phios-hyde`:
 
 1. installs Debian equivalents of HyDE's package list, with the Hyprland stack from `trixie-backports`;
-2. builds what Debian lacks: `awww`, `satty`, `wl-clip-persist` and Waybar 0.15.
+2. builds what Debian lacks: `awww`, `satty`, `wl-clip-persist` and Waybar 0.15, then Tether and Margin.
    - Downloads retry 3 times, and awww falls back to its predecessor `swww` on GitHub if Codeberg is down.
    - Parallel build jobs are sized to free RAM.
    - A tool that fails to build doesn't stop the rest;

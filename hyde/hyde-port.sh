@@ -29,7 +29,7 @@ while (($#)); do
         -h|--help)
             cat <<EOF
 usage: phios-hyde [--no-build] [--no-sddm-theme] [--debian-waybar] [--no-gallery]
-  --no-build        skip compiling awww, satty, wl-clip-persist, waybar
+  --no-build        skip compiling awww, satty, wl-clip-persist, waybar, Tether, Margin
   --no-sddm-theme   keep Debian's login screen
   --debian-waybar   use Debian's waybar 0.12 instead of building 0.15
   --no-gallery      only HyDE's 12 default themes, skip the ~58 from hyde-gallery
@@ -62,6 +62,10 @@ APT_MAIN=(
     dconf-cli
     # phios-discord: sealed Equicord profiles
     bubblewrap xdg-dbus-proxy
+    # Tether (remote sessions, a Tauri app: WebKitGTK + Node to build it, FreeRDP for RDP);
+    # Margin (the text editor) needs nothing beyond Rust
+    libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev libudev-dev
+    nodejs npm freerdp3-sdl
     # phiOS Looks (phios-looks): GTK4 + libadwaita from Python
     python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
     # theming
@@ -171,6 +175,44 @@ build_rust_tools() {
     if ! build_satty; then FAILED_BUILDS+=(satty); say "satty failed, HyDE falls back to swappy"; fi
     say "wl-clip-persist"
     if ! build_clip; then FAILED_BUILDS+=(wl-clip-persist); say "wl-clip-persist failed"; fi
+}
+
+# ---------------------------------------------------------------- phiOS apps
+# Tether (SSH, SFTP, RDP, VNC, serial, tunnels) and Margin (a text editor for files of any size).
+# Built from their repositories; while those are private, a machine without access skips them.
+
+APPS_GIT=https://github.com/convolutionary
+
+fetch_app() { # name -> latest main in $SRC/name
+    local dir=$SRC/$1
+    if [[ -d "$dir/.git" ]]; then
+        GIT_TERMINAL_PROMPT=0 retry git -C "$dir" pull -q --ff-only
+    else
+        rm -rf "$dir"
+        # no prompt: a private repository fails right away instead of asking for a password
+        GIT_TERMINAL_PROMPT=0 git clone -q --depth 1 "$APPS_GIT/$1" "$dir"
+    fi
+}
+
+build_margin() {
+    fetch_app margin && cargo_bin "$SRC/margin" \
+        && sudo PREFIX=/usr/local sh "$SRC/margin/scripts/install-local.sh" --no-build
+}
+
+build_tether() {
+    fetch_app tether \
+        && (cd "$SRC/tether" && npm ci --no-audit --no-fund --loglevel=error \
+            && CARGO_BUILD_JOBS="$(build_jobs)" npx tauri build --bundles deb) \
+        && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q "$SRC"/tether/target/release/bundle/deb/Tether_*_amd64.deb
+}
+
+build_apps() {
+    mkdir -p "$SRC"
+    export PATH="$HOME/.cargo/bin:$PATH"
+    say "Margin (text editor)"
+    if ! build_margin; then FAILED_BUILDS+=(margin); say "Margin unavailable (offline, or its repository is still private)"; fi
+    say "Tether (remote sessions)"
+    if ! build_tether; then FAILED_BUILDS+=(tether); say "Tether unavailable (offline, or its repository is still private)"; fi
 }
 
 build_waybar() {
@@ -479,6 +521,16 @@ EOF
                 print ""; print ""; done = 1 }
              { print }' "$f" >"$tmp" && cat "$tmp" >"$f" && rm -f "$tmp"
     fi
+    # Margin is the text editor: SUPER+C (HyDE binds it to $EDITOR, which is VS Code on Arch and
+    # nothing here) and the default app for text files
+    f=$HOME/.config/hypr/userprefs.conf
+    if command -v margin >/dev/null; then
+        if [[ -f "$f" ]] && ! grep -q 'exec, margin' "$f"; then
+            printf '\n# phiOS: SUPER+C opens Margin, the text editor\nunbind = SUPER, C\nbindd = SUPER, C, text editor, exec, margin\n' >>"$f"
+        fi
+        xdg-mime default margin.desktop text/plain text/x-log text/markdown text/csv application/json \
+            application/x-yaml application/toml application/xml text/x-shellscript 2>/dev/null || true
+    fi
     f=$HOME/.config/hypr/userprefs.conf
     if [[ -f "$f" ]] && ! grep -q 'match:class ^(equibop)' "$f"; then
         printf '\n# phiOS: Equibop (phios-discord profiles) gets the same see-through look as Discord\nwindowrule = opacity 0.80 0.80,match:class ^(equibop)$\n' >>"$f"
@@ -575,9 +627,10 @@ main() {
     local keep=$!
 
     # shellcheck disable=SC2034  # read by step() in lib/ui.sh
-    STEP_TOTAL=$((5 + BUILD + SDDM_THEME))
+    STEP_TOTAL=$((5 + 2 * BUILD + SDDM_THEME))
     step "Packages" install_packages
     if ((BUILD)); then step "Building missing tools" builds; fi
+    if ((BUILD)); then step "Tether and Margin" build_apps; fi
     step "Fetching HyDE" get_hyde
     step "Deploying HyDE" restore_hyde
     step "phiOS glue" glue
