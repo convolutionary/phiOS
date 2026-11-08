@@ -179,7 +179,7 @@ build_rust_tools() {
 
 # ---------------------------------------------------------------- phiOS apps
 # Tether (SSH, SFTP, RDP, VNC, serial, tunnels) and Margin (a text editor for files of any size).
-# Built from their repositories; while those are private, a machine without access skips them.
+# Built from their repositories; one that fails (offline, say) is listed and the rest carries on.
 
 APPS_GIT=https://github.com/convolutionary
 
@@ -189,7 +189,7 @@ fetch_app() { # name -> latest main in $SRC/name
         GIT_TERMINAL_PROMPT=0 retry git -C "$dir" pull -q --ff-only
     else
         rm -rf "$dir"
-        # no prompt: a private repository fails right away instead of asking for a password
+        # no prompt: if GitHub asks for a login, fail right away instead of waiting on it
         GIT_TERMINAL_PROMPT=0 git clone -q --depth 1 "$APPS_GIT/$1" "$dir"
     fi
 }
@@ -210,9 +210,9 @@ build_apps() {
     mkdir -p "$SRC"
     export PATH="$HOME/.cargo/bin:$PATH"
     say "Margin (text editor)"
-    if ! build_margin; then FAILED_BUILDS+=(margin); say "Margin unavailable (offline, or its repository is still private)"; fi
+    if ! build_margin; then FAILED_BUILDS+=(margin); say "Margin failed to build"; fi
     say "Tether (remote sessions)"
-    if ! build_tether; then FAILED_BUILDS+=(tether); say "Tether unavailable (offline, or its repository is still private)"; fi
+    if ! build_tether; then FAILED_BUILDS+=(tether); say "Tether failed to build"; fi
 }
 
 build_waybar() {

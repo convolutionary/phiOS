@@ -249,7 +249,7 @@ What profiles can't hide is what any browser shows a site: GPU, screen size, fon
 - **Tether**: SSH, SFTP, RDP, VNC, serial, telnet, mosh and local terminals in one window, with a file panel that follows your shell, split panes, tunnels that stay up and sessions imported from MobaXterm, PuTTY or `~/.ssh/config`. Its terminal colours follow the HyDE theme.
 - **Margin**: a text editor that opens a 300 GB file as quickly as a small one. It has tabs, find and replace with regex, find in files, syntax highlighting for about 200 languages, a log highlighter, follow-the-file (`tail -f`), and it brings back unsaved work after closing. `SUPER+C` opens it, and it's the default app for text files.
 
-Both are built from source. While their repositories are private, an install without access to them skips both apps and lists them under "didn't build".
+Both are built from source ([github.com/convolutionary/tether](https://github.com/convolutionary/tether), [github.com/convolutionary/margin](https://github.com/convolutionary/margin)). If one doesn't build, the rest of the install carries on and it's listed under "didn't build".
 
 ## The HyDE port
 
